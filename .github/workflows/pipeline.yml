@@ -1,0 +1,106 @@
+name: Cairo Deal-Finder Daily Pipeline
+
+on:
+  # ── 6 off-minute triggers per spec v1.6 Section 6 ─────────────────────────
+  # Two per stage: one for UTC+2 (winter, Nov–Mar), one for UTC+3 (summer, Apr–Oct)
+  # Africa/Cairo guard in Python accepts only the one matching local time.
+  #
+  # Stage 1 — Ingestion (~4:00 AM Cairo)
+  #   UTC+3 (summer): 01:17  | UTC+2 (winter): 02:17
+  # Stage 2 — Scoring  (~5:30 AM Cairo)
+  #   UTC+3 (summer): 02:37  | UTC+2 (winter): 03:37
+  # Stage 3 — Reporting (~7:00 AM Cairo)
+  #   UTC+3 (summer): 04:07  | UTC+2 (winter): 05:07
+
+  schedule:
+    - cron: "17 1 * * *"   # Ingestion — UTC+3
+    - cron: "17 2 * * *"   # Ingestion — UTC+2  |  Scoring — UTC+3
+    - cron: "37 2 * * *"   # Scoring   — UTC+3
+    - cron: "37 3 * * *"   # Scoring   — UTC+2
+    - cron: "7 4 * * *"    # Reporting — UTC+3
+    - cron: "7 5 * * *"    # Reporting — UTC+2
+
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Stage to run (ingestion | scoring | reporting)"
+        required: true
+        default: "ingestion"
+        type: choice
+        options: [ingestion, scoring, reporting]
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Determine which stage to run ──────────────────────────────────────
+      - name: Determine stage
+        id: stage
+        run: |
+          python3 - <<'EOF'
+          import os
+          from datetime import datetime
+          import pytz
+
+          cairo_tz = pytz.timezone("Africa/Cairo")
+          hour = datetime.now(cairo_tz).hour
+
+          # Map Cairo local hour to stage
+          # 3–4:59 AM → ingestion
+          # 5–6:59 AM → scoring
+          # 6:30–8:00 AM → reporting (generous window)
+          if 3 <= hour < 5:
+              stage = "ingestion"
+          elif 5 <= hour < 7:
+              stage = "scoring"
+          elif 6 <= hour < 9:
+              stage = "reporting"
+          else:
+              stage = "none"
+
+          # Override from workflow_dispatch
+          dispatch_stage = os.environ.get("DISPATCH_STAGE", "")
+          if dispatch_stage:
+              stage = dispatch_stage
+
+          print(f"Cairo hour: {hour}  →  stage: {stage}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"stage={stage}\n")
+          EOF
+        env:
+          DISPATCH_STAGE: ${{ inputs.stage || '' }}
+
+      - name: Skip if no stage matches
+        if: steps.stage.outputs.stage == 'none'
+        run: |
+          echo "No stage matches current Cairo time — exiting."
+          exit 0
+
+      - name: Set up Python
+        if: steps.stage.outputs.stage != 'none'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        if: steps.stage.outputs.stage != 'none'
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline stage
+        if: steps.stage.outputs.stage != 'none'
+        run: python main.py --stage ${{ steps.stage.outputs.stage }}
+        env:
+          SUPABASE_URL:       ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY:       ${{ secrets.SUPABASE_KEY }}
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          RESEND_API_KEY:     ${{ secrets.RESEND_API_KEY }}
+          REPORT_EMAIL_TO:    ${{ secrets.REPORT_EMAIL_TO }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
