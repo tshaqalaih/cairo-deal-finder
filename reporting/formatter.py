@@ -57,12 +57,68 @@ def _label_badge(label: str) -> str:
     )
 
 
+
+def _build_verify_section(listing: dict, overdue_amount: str) -> str:
+    """Build a per-listing 'What to check' section."""
+    items = []
+
+    # Missing fields that affect the score
+    if listing.get("view_type", "not_specified") == "not_specified":
+        items.append(("❓", "View type unknown — ask seller or check on-site"))
+    if listing.get("parking_included", "not_specified") == "not_specified":
+        items.append(("❓", "Parking status unknown — confirm with seller"))
+    if listing.get("finishing_status", "not_specified") == "not_specified":
+        items.append(("❓", "Finishing status not specified — verify on-site"))
+    if listing.get("floor_number") in (None, "not_specified", "—"):
+        items.append(("❓", "Floor number unknown"))
+
+    # Overdue amounts — always flag if present
+    overdue = listing.get("known_overdue_amounts", 0) or 0
+    if overdue > 0:
+        items.append(("⚠️", f"Overdue installments: EGP {overdue:,.0f} — must be cleared before transfer"))
+
+    # Upfront exceeds limit
+    if listing.get("upfront_exceeds_limit"):
+        items.append(("⚠️", "Day-1 cash exceeds your EGP 4M limit — confirm you can cover this"))
+
+    # Delivery soon or passed
+    delivery_raw = listing.get("delivery_date_raw") or ""
+    if delivery_raw and any(y in delivery_raw for y in ["2025", "2026"]):
+        items.append(("📋", f"Delivery {delivery_raw} — verify actual date directly with developer"))
+
+    # Data confidence
+    confidence = listing.get("latest_data_confidence") or 0
+    if confidence < 0.85:
+        items.append(("📋", f"Data confidence {confidence:.0%} — some fields may be incomplete"))
+
+    # No comparables
+    scoring = listing.get("_scoring", {})
+    if scoring.get("comparable_cluster_count", 0) == 0:
+        items.append(("📋", "No comparable clusters yet — get 3 independent price quotes before committing"))
+
+    if not items:
+        return ""
+
+    rows = "".join(
+        f'<li style="margin-bottom:3px;">'
+        f'<span style="margin-right:4px;">{icon}</span>{text}</li>'
+        for icon, text in items
+    )
+    return f"""
+      <div style="margin-top:12px;padding:10px;background:#fff8e1;border-left:3px solid #f59e0b;border-radius:0 4px 4px 0;font-size:12px;">
+        <div style="font-weight:bold;margin-bottom:6px;color:#92400e;">What to check for this unit</div>
+        <ul style="margin:0;padding-left:16px;color:#78350f;">{rows}</ul>
+      </div>"""
+
 def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
     s = listing.get("_scoring", {})
 
-    project   = listing.get("project_name_raw") or "Unknown project"
-    dev       = listing.get("developer_raw") or ""
-    loc       = listing.get("location_raw") or ""
+    project    = listing.get("project_name_raw") or "Unknown project"
+    dev        = listing.get("developer_raw") or ""
+    loc        = listing.get("location_raw") or ""
+    entry_type = listing.get("entry_type", "compound")
+    entry_labels = {"compound": "🏘 Compound", "neighborhood": "🏙 Neighborhood", "small_compound": "🏠 Small Compound"}
+    entry_badge  = entry_labels.get(entry_type, "🏘 Compound")
     ptype     = (listing.get("property_type") or "").capitalize()
     beds      = listing.get("bedroom_count") or "—"
     bua       = listing.get("bua_sqm") or "—"
@@ -78,6 +134,8 @@ def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
     ae_fee    = listing.get("aqar_exit_fee_egp")
     total_now = listing.get("total_required_now_egp")
     upfront   = listing.get("upfront_cash_required")
+    overdue_egp = listing.get("known_overdue_amounts", 0) or 0
+    overdue_str = f"EGP {overdue_egp:,.0f}" if overdue_egp else ""
     exceeds   = listing.get("upfront_exceeds_limit")
 
     ce20 = listing.get("latest_cash_equivalent_20")
@@ -109,7 +167,11 @@ def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
           <h3 style="margin:4px 0;color:{C_PRIMARY};">
             <a href="{url}" style="color:{C_PRIMARY};text-decoration:none;">{project}</a>
           </h3>
-          <div style="color:{C_MUTED};font-size:13px;">{dev} · {loc} · {uid}</div>
+          <div style="font-size:13px;margin-top:2px;">
+            <span style="background:#e8f5e9;color:#2d6a4f;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold;">{entry_badge}</span>
+            {'&nbsp;<strong>' + dev + '</strong>' if dev else ''}
+            <span style="color:{C_MUTED};"> · {loc} · {uid}</span>
+          </div>
         </div>
         <div style="text-align:right;">
           {_score_bar(score)}
@@ -203,6 +265,8 @@ def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
           </tr>
         </table>
       </details>
+
+      {_build_verify_section(listing, overdue_str)}
 
       <div style="margin-top:12px;font-size:12px;color:{C_MUTED};">
         <a href="{url}" style="color:{C_ACCENT};">View on Aqar Exit →</a>

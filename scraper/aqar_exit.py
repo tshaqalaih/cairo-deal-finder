@@ -151,7 +151,7 @@ def scrape_new_cairo_listings(heartbeat_fn=None) -> Generator[dict, None, None]:
             "developer_raw":         parsed.get("developer_raw"),
             "location_raw":          parsed.get("location_raw") or "التجمع الخامس",
             "unit_id":               parsed.get("unit_id"),
-            "entry_type":            "compound",
+            "entry_type":            parsed.get("entry_type", "compound"),
             "property_type":         parsed.get("property_type", "unknown"),
             "bedroom_count":         parsed.get("bedroom_count"),
             "bua_sqm":               parsed.get("bua_sqm"),

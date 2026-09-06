@@ -1,22 +1,20 @@
 """
-Aqar Exit HTML parser.
+Aqar Exit HTML parser — v2.
 
-Extracts structured data from listing cards (opportunities page)
-and detail pages. Because Aqar Exit pre-structures all key fields,
-Claude normalization is NOT needed for the primary transaction legs.
-
-Fields already structured by Aqar Exit:
-  • seller_cash_required_now       ("Cash required now")
-  • remaining_with_developer        ("Remaining with developer")
-  • installment_amount + frequency  ("Installment EGP X · Quarterly")
-  • installments_remaining_years    ("Instalments remaining: N years")
-  • annual_installment              ("Annual installment: EGP X")
-  • delivery_date                   ("Delivery: YYYY")
-  • floor, bedrooms, bathrooms, area, type, finishing, completion
-  • aqar_exit_fee_egp               (1.25% of contract value, shown on detail page)
-  • total_required_now              (cash + Aqar Exit fee, shown on detail page)
-  • unit_id (U-XXXXX)
-  • is_negotiable, is_featured, documents_verified
+Extracts structured data from detail pages.
+Field extraction based on confirmed page structure:
+  # Project Name          ← h1
+  Developer · Location · Type   ← subtitle line with · separators
+  U-XXXXX                ← unit ID
+  Type / Area / Floor / Bedrooms / Bathrooms / Finishing / Completion ...
+  Cash required now: EGP X
+  Remaining with developer: EGP X
+  Installment: EGP X · Frequency
+  Instalments remaining: N years
+  Annual installment: EGP X
+  Delivery: YYYY
+  Aqar Exit buyer's fee (1.25%): EGP X
+  Total required from you now: EGP X
 """
 from __future__ import annotations
 import re
@@ -25,27 +23,50 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
-# ── Arabic unit type mapping ──────────────────────────────────────────────────
+# Known open neighborhoods for entry_type inference
+_NEIGHBORHOOD_KEYWORDS = {
+    "بيت الوطن", "النرجس", "البنفسج", "اللوتس", "الأندلس", "andalos", "andalus",
+    "المستثمرين الشمالية", "المستثمرين الجنوبية", "north investors", "south investors",
+    "شرق الأكاديمية", "غرب اربيلا", "west arbella", "القرنفل", "الشويفات",
+    "narges", "banafseg", "lotus", "beit al watan", "east academy",
+}
+
 _TYPE_MAP = {
-    "شقة":      "apartment",
-    "دوبلكس":   "duplex",
-    "فيلا":     "villa",
-    "تاون هاوس": "townhouse",
-    "تاون هاوز": "townhouse",
-    "تاون":     "townhouse",
-    "توين هاوس": "twinhouse",
-    "توين":     "twinhouse",
-    "بنتهاوس":  "penthouse",
-    "بنتهاوز":  "penthouse",
-    "شاليه":    "chalet",
-    "مكتب":     "office",
-    "محل":      "retail",
-    "عيادة":    "clinic",
+    "شقة":        "apartment",
     "apartment":  "apartment",
+    "دوبلكس":     "duplex",
     "duplex":     "duplex",
+    "فيلا":       "villa",
     "villa":      "villa",
+    "تاون هاوس":  "townhouse",
+    "تاون هاوز":  "townhouse",
     "townhouse":  "townhouse",
+    "توين هاوس":  "twinhouse",
+    "twinhouse":  "twinhouse",
+    "بنتهاوس":    "penthouse",
     "penthouse":  "penthouse",
+    "شاليه":      "chalet",
+    "مكتب":       "office",
+    "محل":        "retail",
+    "عيادة":      "clinic",
+}
+
+_FINISHING_MAP = {
+    "تشطيب كامل":        "fully_finished",
+    "fully finished":    "fully_finished",
+    "نص تشطيب":          "semi_finished",
+    "semi finished":     "semi_finished",
+    "على الطوب":         "core_and_shell",   # ← important: Aqar Exit uses this
+    "core and shell":    "core_and_shell",
+    "بدون تشطيب":        "core_and_shell",
+}
+
+_DELIVERY_MAP = {
+    "تحت الإنشاء":        "under_construction",
+    "under construction": "under_construction",
+    "جاهز للتسليم":       "ready_to_move",
+    "ready":              "ready_to_move",
+    "تم التسليم":         "delivered_not_finished",
 }
 
 _FREQUENCY_MAP = {
@@ -59,279 +80,200 @@ _FREQUENCY_MAP = {
     "سنوي":        "annual",
 }
 
-_FINISHING_MAP = {
-    "تشطيب كامل":        "fully_finished",
-    "تشطيب":             "fully_finished",
-    "fully finished":    "fully_finished",
-    "نص تشطيب":          "semi_finished",
-    "semi finished":     "semi_finished",
-    "core and shell":    "core_and_shell",
-    "بدون تشطيب":        "core_and_shell",
-}
 
-_DELIVERY_STATUS_MAP = {
-    "تحت الإنشاء":       "under_construction",
-    "under construction": "under_construction",
-    "جاهز للتسليم":      "ready_to_move",
-    "ready":             "ready_to_move",
-    "تم التسليم":        "delivered_not_finished",
-}
-
-
-def _egp(text: str) -> float | None:
-    """Extract first EGP number from a string. Returns None if not found."""
+def _egp(text: str | None) -> float | None:
     if not text:
         return None
-    cleaned = text.replace(",", "").replace("EGP", "").replace("جنيه", "").strip()
+    cleaned = re.sub(r"[,EGPجنيه\s]", "", text)
     m = re.search(r"[\d]+(?:\.\d+)?", cleaned)
     return float(m.group()) if m else None
 
 
-def _int_or_none(text: str) -> int | None:
+def _int_or_none(text: str | None) -> int | None:
     m = re.search(r"\d+", text or "")
     return int(m.group()) if m else None
 
 
-def parse_listing_card(card_html: str, base_url: str) -> dict | None:
-    """
-    Parse a single listing card from the opportunities listing page.
-    Returns a dict with the fields extractable at list level,
-    or None if the card is missing essential data.
-    """
-    soup = BeautifulSoup(card_html, "lxml")
-    result: dict = {}
-
-    # ── Unit ID ────────────────────────────────────────────────────────────────
-    uid_el = soup.find(string=re.compile(r"U-\d+"))
-    result["unit_id"] = uid_el.strip() if uid_el else None
-
-    # ── Project name ───────────────────────────────────────────────────────────
-    h2 = soup.find("h2")
-    result["project_name_raw"] = h2.get_text(strip=True) if h2 else None
-
-    # ── Developer and location ─────────────────────────────────────────────────
-    # Pattern: "Developer · Location" in a single text node
-    dev_loc_el = soup.find(string=re.compile(r"·"))
-    if dev_loc_el:
-        parts = [p.strip() for p in dev_loc_el.split("·")]
-        result["developer_raw"]    = parts[0] if len(parts) > 0 else None
-        result["location_raw"]     = parts[1] if len(parts) > 1 else None
-    else:
-        result["developer_raw"]    = None
-        result["location_raw"]     = None
-
-    # ── Type / bedrooms / bathrooms / area ────────────────────────────────────
-    # Pattern: "شقة · 3 غرف · 2 حمام · 169 م²"
-    spec_el = soup.find(string=re.compile(r"غرف|م²|bedroom|m²", re.IGNORECASE))
-    if spec_el:
-        spec = spec_el.strip()
-        parts = [p.strip() for p in spec.split("·")]
-        result["property_type_raw"] = parts[0] if parts else None
-        result["property_type"]     = _TYPE_MAP.get(
-            (parts[0] or "").strip().lower(), "unknown"
-        )
-        for part in parts[1:]:
-            p = part.lower()
-            if "غرف" in p or "br" in p or "bedroom" in p:
-                result["bedroom_count"] = _int_or_none(part)
-            elif "حمام" in p or "bath" in p:
-                result["bathroom_count"] = _int_or_none(part)
-            elif "م²" in p or "m²" in p:
-                result["bua_sqm"] = _egp(part)
-    else:
-        result["property_type"]  = "unknown"
-        result["bedroom_count"]  = None
-        result["bathroom_count"] = None
-        result["bua_sqm"]        = None
-
-    # ── Cash required now ─────────────────────────────────────────────────────
-    cash_el = soup.find(string=re.compile(r"Cash required now|الكاش المطلوب", re.IGNORECASE))
-    if cash_el:
-        # Value is usually the next sibling element
-        parent = cash_el.parent
-        nxt = parent.find_next_sibling() if parent else None
-        val_text = nxt.get_text() if nxt else ""
-        result["seller_cash_required_now"] = _egp(val_text)
-    else:
-        result["seller_cash_required_now"] = None
-
-    # ── Remaining with developer ───────────────────────────────────────────────
-    rem_el = soup.find(string=re.compile(r"Remaining with developer|الباقي على المطور", re.IGNORECASE))
-    if rem_el:
-        parent = rem_el.parent
-        nxt = parent.find_next_sibling() if parent else None
-        result["remaining_with_developer"] = _egp(nxt.get_text() if nxt else "")
-    else:
-        result["remaining_with_developer"] = None
-
-    # ── Installment amount and frequency ──────────────────────────────────────
-    inst_el = soup.find(string=re.compile(r"Installment|قسط", re.IGNORECASE))
-    if inst_el:
-        parent = inst_el.parent
-        nxt = parent.find_next_sibling() if parent else None
-        inst_text = nxt.get_text() if nxt else ""
-        # "EGP 83,500 · Quarterly" or "EGP 83,500 · ربع سنوي"
-        result["installment_amount_egp"]    = _egp(inst_text)
-        freq_match = re.search(
-            r"(quarterly|semi-annual|monthly|annual|ربع سنوي|نصف سنوي|شهري|سنوي)",
-            inst_text, re.IGNORECASE
-        )
-        result["installment_frequency"] = _FREQUENCY_MAP.get(
-            freq_match.group().lower() if freq_match else "", "unknown"
-        )
-    else:
-        result["installment_amount_egp"]  = None
-        result["installment_frequency"]   = "unknown"
-
-    # ── Delivery year ─────────────────────────────────────────────────────────
-    del_el = soup.find(string=re.compile(r"Delivery|تسليم", re.IGNORECASE))
-    if del_el:
-        parent = del_el.parent
-        nxt = parent.find_next_sibling() if parent else None
-        result["delivery_date_raw"] = nxt.get_text(strip=True) if nxt else None
-    else:
-        result["delivery_date_raw"] = None
-
-    # ── Flags ─────────────────────────────────────────────────────────────────
-    result["is_negotiable"]        = bool(soup.find(string=re.compile(r"قابل للتفاوض|Open to negotiation", re.IGNORECASE)))
-    result["is_featured"]          = bool(soup.find(string=re.compile(r"Featured|مميز", re.IGNORECASE)))
-    result["documents_verified"]   = bool(soup.find(string=re.compile(r"Documents verified|موثق", re.IGNORECASE)))
-
-    # ── Detail URL ────────────────────────────────────────────────────────────
-    detail_link = soup.find("a", href=re.compile(r"/buy/opportunity/"))
-    if detail_link:
-        href = detail_link["href"]
-        result["source_url"] = href if href.startswith("http") else base_url + href
-    else:
-        result["source_url"] = None
-
-    return result if result.get("project_name_raw") else None
+def _infer_entry_type(project_name: str) -> str:
+    """Infer entry_type from project name."""
+    if not project_name:
+        return "compound"
+    name_lower = project_name.lower()
+    for keyword in _NEIGHBORHOOD_KEYWORDS:
+        if keyword.lower() in name_lower:
+            return "neighborhood"
+    return "compound"
 
 
 def parse_detail_page(html: str, url: str) -> dict:
     """
-    Parse a listing detail page. Returns a dict with all available fields.
-    Supplements the card-level data with floor, finishing, completion,
-    Aqar Exit fee, total required now, and installment year details.
+    Parse a listing detail page. Returns dict with all extracted fields.
+
+    Page structure (confirmed from live page):
+      h1: project name only (e.g. "هايد بارك التجمع الخامس")
+      subtitle: "Developer · Location · Type" (e.g. "هايد بارك · التجمع الخامس · شقة")
+      Unit ID: U-XXXXX
+      Spec table: Type, Area, Floor, Bedrooms, Bathrooms, Finishing, Completion
+      Financial fields: Cash required now, Remaining, Installment, etc.
     """
     soup = BeautifulSoup(html, "lxml")
     result: dict = {"source_url": url}
 
-    def _field_value(label_pattern: str) -> str | None:
-        """Find a label by pattern and return the next sibling's text."""
+    # ── Project name from h1 ──────────────────────────────────────────────
+    h1 = soup.find("h1")
+    project_name = h1.get_text(strip=True) if h1 else None
+    result["project_name_raw"] = project_name
+
+    # ── Developer · Location · Type subtitle ─────────────────────────────
+    # Find first element containing both · and the location
+    developer_raw = None
+    location_raw = None
+    property_type_raw = None
+
+    for el in soup.find_all(["p", "div", "span", "h2"]):
+        text = el.get_text(strip=True)
+        if "·" in text and len(text) < 200:
+            parts = [p.strip() for p in text.split("·")]
+            if len(parts) >= 2:
+                # Likely: Developer · Location · Type
+                developer_raw    = parts[0] if parts[0] else None
+                location_raw     = parts[1] if len(parts) > 1 else None
+                property_type_raw = parts[2] if len(parts) > 2 else None
+                break
+
+    result["developer_raw"]     = developer_raw
+    result["location_raw"]      = location_raw
+    result["property_type_raw"] = property_type_raw
+    result["property_type"]     = _TYPE_MAP.get(
+        (property_type_raw or "").strip().lower(), "unknown"
+    )
+
+    # Infer entry_type from project name + location
+    combined = f"{project_name or ''} {location_raw or ''}".lower()
+    result["entry_type"] = _infer_entry_type(combined)
+
+    # ── Unit ID ────────────────────────────────────────────────────────────
+    uid_el = soup.find(string=re.compile(r"U-\d{4,}"))
+    result["unit_id"] = uid_el.strip().rstrip("⧉").strip() if uid_el else None
+
+    # ── Spec table fields ─────────────────────────────────────────────────
+    def _after_label(label_pattern: str) -> str | None:
+        """Find label text and return the next sibling/nearby text."""
         el = soup.find(string=re.compile(label_pattern, re.IGNORECASE))
         if not el:
             return None
         parent = el.parent
-        nxt = parent.find_next_sibling() if parent else None
-        return nxt.get_text(strip=True) if nxt else None
+        # Try next sibling
+        nxt = parent.find_next_sibling()
+        if nxt and nxt.get_text(strip=True):
+            return nxt.get_text(strip=True)
+        # Try parent's next sibling
+        if parent.parent:
+            nxt2 = parent.parent.find_next_sibling()
+            if nxt2:
+                return nxt2.get_text(strip=True)
+        return None
 
-    # ── Unit ID ────────────────────────────────────────────────────────────────
-    uid = soup.find(string=re.compile(r"U-\d+"))
-    result["unit_id"] = uid.strip() if uid else None
+    # Floor
+    floor_raw = _after_label(r"^Floor$|^الدور$|^الطابق$")
+    result["floor_number"] = floor_raw
 
-    # ── Title (project + developer + location + type) ─────────────────────────
-    h1 = soup.find("h1")
-    result["project_name_raw"] = h1.get_text(strip=True) if h1 else None
+    # Bedrooms
+    beds_raw = _after_label(r"^Bedrooms$|^غرف النوم$|^الغرف$")
+    result["bedroom_count"] = _int_or_none(beds_raw)
 
-    # Developer · Location · Type line
-    dev_loc_el = soup.find(string=re.compile(r"·"))
-    if dev_loc_el:
-        parts = [p.strip() for p in str(dev_loc_el).split("·")]
-        result["developer_raw"] = parts[0] if len(parts) > 0 else None
-        result["location_raw"]  = parts[1] if len(parts) > 1 else None
-        result["property_type_raw"] = parts[2] if len(parts) > 2 else None
-        result["property_type"] = _TYPE_MAP.get(
-            (parts[2] if len(parts) > 2 else "").strip().lower(), "unknown"
-        )
+    # Bathrooms
+    baths_raw = _after_label(r"^Bathrooms$|^الحمامات$")
+    result["bathroom_count"] = _int_or_none(baths_raw)
 
-    # ── Explicit detail fields ─────────────────────────────────────────────────
-    result["floor_number"]    = _field_value(r"^Floor$|^الدور$")
-    result["bedroom_count"]   = _int_or_none(_field_value(r"^Bedrooms$|^غرف النوم$") or "")
-    result["bathroom_count"]  = _int_or_none(_field_value(r"^Bathrooms$|^الحمامات$") or "")
-
-    area_raw = _field_value(r"^Area$|^المساحة$")
+    # Area
+    area_raw = _after_label(r"^Area$|^المساحة$")
     result["bua_sqm"] = _egp(area_raw) if area_raw else None
 
-    finishing_raw = _field_value(r"^Finishing$|^التشطيب$")
+    # Finishing
+    finishing_raw = _after_label(r"^Finishing$|^التشطيب$")
     result["finishing_status"] = _FINISHING_MAP.get(
         (finishing_raw or "").strip().lower(), "not_specified"
     )
     result["finishing_notes"] = finishing_raw
 
-    completion_raw = _field_value(r"^Completion$|^الاكتمال$")
-    result["delivery_status"] = _DELIVERY_STATUS_MAP.get(
+    # Completion/delivery status
+    completion_raw = _after_label(r"^Completion$|^الاكتمال$|^حالة الوحدة$")
+    result["delivery_status"] = _DELIVERY_MAP.get(
         (completion_raw or "").strip().lower(), "not_specified"
     )
 
-    result["contract_year"]      = _field_value(r"^Contract year$|^سنة العقد$")
-    result["price_per_sqm_raw"]  = _field_value(r"Price per m²|سعر المتر")
+    # Contract year
+    result["contract_year"] = _after_label(r"^Contract year$|^سنة العقد$")
 
-    # ── Transaction legs ──────────────────────────────────────────────────────
-    cash_raw = _field_value(r"Cash required now|الكاش المطلوب")
+    # ── Financial fields ───────────────────────────────────────────────────
+    cash_raw = _after_label(r"Cash required now|الكاش المطلوب الآن|الكاش المطلوب")
     result["seller_cash_required_now"] = _egp(cash_raw)
 
-    remaining_raw = _field_value(r"Remaining with developer|الباقي على المطور")
+    remaining_raw = _after_label(r"Remaining with developer|الباقي على المطور")
     result["remaining_with_developer"] = _egp(remaining_raw)
 
-    inst_amount_raw = _field_value(r"^Installment$|^القسط$")
-    result["installment_amount_egp"] = _egp(inst_amount_raw)
-    freq_match = re.search(
-        r"(quarterly|semi-annual|monthly|annual|ربع سنوي|نصف سنوي|شهري|سنوي)",
-        inst_amount_raw or "", re.IGNORECASE
-    )
-    result["installment_frequency"] = _FREQUENCY_MAP.get(
-        freq_match.group().lower() if freq_match else "", "unknown"
-    )
+    # Installment amount and frequency
+    inst_raw = _after_label(r"^Installment$|^القسط$")
+    result["installment_amount_egp"] = _egp(inst_raw)
+    if inst_raw:
+        freq_m = re.search(
+            r"(quarterly|semi-annual|monthly|annual|ربع سنوي|نصف سنوي|شهري|سنوي)",
+            inst_raw, re.IGNORECASE
+        )
+        result["installment_frequency"] = _FREQUENCY_MAP.get(
+            freq_m.group().lower() if freq_m else "", "unknown"
+        )
+    else:
+        result["installment_frequency"] = "unknown"
 
-    remaining_years_raw = _field_value(r"Instalments remaining|الأقساط المتبقية")
-    result["installments_remaining_years"] = _int_or_none(remaining_years_raw or "")
+    # Years remaining
+    years_raw = _after_label(r"Instalments remaining|الأقساط المتبقية")
+    result["installments_remaining_years"] = _int_or_none(years_raw)
 
-    annual_raw = _field_value(r"Annual installment|القسط السنوي")
+    # Annual installment
+    annual_raw = _after_label(r"Annual installment|القسط السنوي")
     result["annual_installment_egp"] = _egp(annual_raw)
 
-    result["delivery_date_raw"] = _field_value(r"^Delivery$|^التسليم$")
+    # Delivery year
+    delivery_raw = _after_label(r"^Delivery$|^التسليم$|^موعد التسليم$")
+    result["delivery_date_raw"] = delivery_raw
 
-    # ── Aqar Exit fee and total ────────────────────────────────────────────────
-    fee_raw = _field_value(r"Aqar Exit buyer.s fee|عمولة عقار إكزت")
+    # Aqar Exit fee
+    fee_raw = _after_label(r"Aqar Exit buyer.s fee|عمولة عقار إكزت|عمولة المشتري")
     result["aqar_exit_fee_egp"] = _egp(fee_raw)
 
-    total_raw = _field_value(r"Total required from you now|إجمالي المطلوب")
+    # Total required now
+    total_raw = _after_label(r"Total required from you now|إجمالي المطلوب منك الآن")
     result["total_required_now_egp"] = _egp(total_raw)
 
-    # ── Flags ─────────────────────────────────────────────────────────────────
-    result["is_negotiable"]      = bool(soup.find(string=re.compile(r"قابل للتفاوض|Open to negotiation", re.IGNORECASE)))
+    # ── Flags ──────────────────────────────────────────────────────────────
+    result["is_negotiable"]      = bool(soup.find(string=re.compile(r"Open to negotiation|قابل للتفاوض", re.IGNORECASE)))
     result["is_featured"]        = bool(soup.find(string=re.compile(r"Featured|مميز", re.IGNORECASE)))
     result["documents_verified"] = bool(soup.find(string=re.compile(r"Documents verified|موثق", re.IGNORECASE)))
 
-    # ── Amenities / notes ─────────────────────────────────────────────────────
-    # Collect all checkmark items (✓ ... )
+    # ── Amenities ──────────────────────────────────────────────────────────
     amenities = []
     for el in soup.find_all(string=re.compile(r"✓")):
-        amenities.append(el.strip().lstrip("✓").strip())
+        text = el.strip().lstrip("✓").strip()
+        if text:
+            amenities.append(text)
     result["amenities_raw"] = amenities
 
     return result
 
 
 def build_installment_schedule(parsed: dict) -> list[dict]:
-    """
-    Build installment_schedule rows from detail page data.
-    We know: amount per period, frequency, total years remaining.
-    Exact due dates are not available — stored as estimated.
-    Returns [] for confirmed cash deals (no remaining).
-    Returns [] with a flag if data is insufficient.
-    """
+    """Build installment schedule rows from parsed detail data."""
     if not parsed.get("remaining_with_developer"):
-        # No remaining installments — cash deal or not stated
         return []
 
-    amount   = parsed.get("installment_amount_egp")
-    freq     = parsed.get("installment_frequency", "unknown")
-    years    = parsed.get("installments_remaining_years")
+    amount = parsed.get("installment_amount_egp")
+    freq   = parsed.get("installment_frequency", "unknown")
+    years  = parsed.get("installments_remaining_years")
 
     if not amount or freq == "unknown" or not years:
-        return []  # Insufficient data — caller marks as UNKNOWN
+        return []
 
     periods_per_year = {
         "monthly": 12, "quarterly": 4,
@@ -344,9 +286,9 @@ def build_installment_schedule(parsed: dict) -> list[dict]:
     total_payments = int(years * periods_per_year)
     return [
         {
-            "payment_number":    i + 1,
-            "payment_amount_egp": amount,
-            "due_date":          None,       # Not available from listing
+            "payment_number":      i + 1,
+            "payment_amount_egp":  amount,
+            "due_date":            None,
             "due_date_confidence": "estimated",
             "notes": (
                 f"~{freq} payment; approx {years} years remaining; "
@@ -358,15 +300,12 @@ def build_installment_schedule(parsed: dict) -> list[dict]:
 
 
 def build_upfront_fees(parsed: dict) -> list[dict]:
-    """
-    Build upfront_transaction_fees rows.
-    Aqar Exit fee is always 1.25% — shown explicitly on detail page.
-    """
+    """Build upfront_transaction_fees rows."""
     fees = []
     if parsed.get("aqar_exit_fee_egp"):
         fees.append({
-            "fee_type":        "assignment_fee",
-            "amount_egp":      parsed["aqar_exit_fee_egp"],
+            "fee_type":         "assignment_fee",
+            "amount_egp":       parsed["aqar_exit_fee_egp"],
             "amount_confirmed": True,
             "notes": "Aqar Exit buyer commission 1.25% of contract value — confirmed on listing",
         })
