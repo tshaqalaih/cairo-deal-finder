@@ -25,8 +25,9 @@ NPV_DISCOUNT_RATE_DEFAULT = 0.25      # 25% annual; shown alongside 20% and 30%
 
 # ── Scraper behaviour ────────────────────────────────────────────────────────
 SCRAPER_USER_AGENT = (
-    "CairoDealFinder/1.0 (personal research tool; "
-    "contact: info@example.com)"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
 )
 SCRAPER_REQUEST_DELAY_S = 2.5         # Seconds between requests (polite)
 SCRAPER_MAX_PAGES       = 50          # Safety ceiling; ~1,000 listings per run

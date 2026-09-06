@@ -84,6 +84,7 @@ def _process_listing(listing: dict) -> None:
     price_note    = listing.pop("_price_basis_note", "")
     ae_fee        = listing.pop("_ae_fee", 0)
     is_new        = listing.pop("_is_new", True)
+    listing.pop("_context", None)
 
     # ── Upsert listing row ─────────────────────────────────────────────────
     row = db.upsert_listing(listing)
