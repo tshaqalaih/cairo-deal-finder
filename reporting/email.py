@@ -22,7 +22,7 @@ def send(subject: str, html_body: str) -> bool:
 
     try:
         resp = resend.Emails.send({
-            "from":    "Cairo Deal-Finder <report@yourdomain.com>",
+            "from":    "Cairo Deal-Finder <onboarding@resend.dev>",
             "to":      [config.REPORT_EMAIL_TO],
             "subject": subject,
             "html":    html_body,

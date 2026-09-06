@@ -80,7 +80,7 @@ def send(data: dict) -> bool:
         resp = requests.post(url, json={
             "chat_id":    config.TELEGRAM_CHAT_ID,
             "text":       message,
-            "parse_mode": None,   # Plain text — no markdown escaping issues
+               # Plain text — no markdown escaping issues
             "disable_web_page_preview": True,
         }, timeout=10)
         if resp.ok:
