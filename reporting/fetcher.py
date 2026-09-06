@@ -54,8 +54,18 @@ def fetch_report_data() -> dict:
     top10 = top10_resp.data or []
 
     # ── Enrich with latest scoring run (for reasons + comparables) ─────────
+    # Load reference projects for intelligence section
+    ref_resp = (
+        db.table("reference_projects")
+        .select("project_name, project_maturity, liquidity_tier, delivery_track_record, notes, known_aliases")
+        .eq("active", True)
+        .execute()
+    )
+    ref_lookup = {r["project_name"]: r for r in (ref_resp.data or [])}
+
     for listing in top10:
         _enrich_with_scoring_run(db, listing)
+        _enrich_with_reference(db, listing, ref_lookup)
 
     # ── Top 3 leads: Stage 1 eligible first, then by score ─────────────────
     # Find Stage 1 eligible listings
@@ -110,6 +120,22 @@ def fetch_report_data() -> dict:
         "run_datetime":  now.strftime("%d %b %Y, %H:%M Cairo time"),
         "total_eligible": total_eligible,
     }
+
+
+def _enrich_with_reference(db, listing: dict, ref_lookup: dict) -> None:
+    """Attach reference project data to a listing."""
+    project_name = (listing.get("project_name_raw") or "").lower()
+    for canonical, rec in ref_lookup.items():
+        if canonical.lower() in project_name or project_name in canonical.lower():
+            listing["_ref_project"] = rec
+            return
+        aliases = rec.get("known_aliases") or []
+        if isinstance(aliases, list):
+            for alias in aliases:
+                if alias and (alias.lower() in project_name or project_name in alias.lower()):
+                    listing["_ref_project"] = rec
+                    return
+    listing["_ref_project"] = None
 
 
 def _enrich_with_scoring_run(db, listing: dict) -> None:

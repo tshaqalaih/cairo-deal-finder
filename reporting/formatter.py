@@ -160,7 +160,55 @@ def _build_verify_section(listing: dict, overdue_amount: str) -> str:
         <ul style="margin:0;padding-left:16px;color:#78350f;">{cost_rows}</ul>
       </div>"""
 
-def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
+
+def _build_project_intel(listing: dict, ref_project: dict | None) -> str:
+    """Build project intelligence section from reference dataset."""
+    if not ref_project:
+        return ""
+
+    maturity   = ref_project.get("project_maturity", "unknown")
+    liquidity  = ref_project.get("liquidity_tier", "unknown")
+    delivery   = ref_project.get("delivery_track_record", "unknown")
+    notes      = ref_project.get("notes", "")
+
+    maturity_labels = {
+        "established": ("✅", "Established community — people living there, amenities active"),
+        "emerging":    ("🔄", "Emerging — still developing, community not yet fully formed"),
+        "new_standalone": ("⚠️", "New standalone — no track record yet"),
+        "unknown":     ("❓", "Community status unknown"),
+    }
+    liquidity_labels = {
+        "high":    ("🟢", "High resale liquidity — easy to sell if needed"),
+        "medium":  ("🟡", "Medium resale liquidity"),
+        "low":     ("🔴", "Low resale liquidity — harder to exit"),
+        "unknown": ("❓", "Resale liquidity unknown"),
+    }
+    delivery_labels = {
+        "excellent": ("✅", "Excellent delivery track record"),
+        "good":      ("✅", "Good delivery track record"),
+        "fair":      ("⚠️", "Fair delivery track record — some delays reported"),
+        "completed": ("✅", "Completed — fully delivered"),
+        "unknown":   ("❓", "Delivery track record unknown"),
+    }
+
+    m_icon, m_text = maturity_labels.get(maturity, ("❓", maturity))
+    l_icon, l_text = liquidity_labels.get(liquidity, ("❓", liquidity))
+    d_icon, d_text = delivery_labels.get(delivery, ("❓", delivery))
+
+    notes_html = f'<li style="margin-bottom:3px;">📝 {notes}</li>' if notes else ""
+
+    return f"""
+      <div style="margin-top:10px;padding:10px;background:#f0f4ff;border-left:3px solid #4361ee;border-radius:0 4px 4px 0;font-size:12px;">
+        <div style="font-weight:bold;margin-bottom:6px;color:#1a1a2e;">Project intelligence</div>
+        <ul style="margin:0;padding-left:16px;color:#333;">
+          <li style="margin-bottom:3px;">{m_icon} Community: {m_text}</li>
+          <li style="margin-bottom:3px;">{l_icon} Resale liquidity: {l_text}</li>
+          <li style="margin-bottom:3px;">{d_icon} Developer delivery: {d_text}</li>
+          {notes_html}
+        </ul>
+      </div>"""
+
+def _listing_card(listing: dict, rank: int, is_lead: bool = False, ref_project: dict | None = None) -> str:
     s = listing.get("_scoring", {})
 
     project    = listing.get("project_name_raw") or "Unknown project"
@@ -217,9 +265,9 @@ def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
           <h3 style="margin:4px 0;color:{C_PRIMARY};">
             <a href="{url}" style="color:{C_PRIMARY};text-decoration:none;">{project}</a>
           </h3>
-                  <div style="font-size:13px;margin-top:2px;">
+          <div style="font-size:13px;margin-top:2px;">
             <span style="background:#e8f5e9;color:#2d6a4f;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold;">{entry_badge}</span>
-            {'&nbsp;<strong>' + dev.split("·")[0].strip() + '</strong>' if dev else ''}
+            {'&nbsp;<strong>' + dev + '</strong>' if dev else ''}
             <span style="color:{C_MUTED};"> · {loc} · {uid}</span>
           </div>
         </div>
@@ -316,6 +364,7 @@ def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
         </table>
       </details>
 
+      {_build_project_intel(listing, ref_project)}
       {_build_verify_section(listing, overdue_str)}
 
       <div style="margin-top:12px;font-size:12px;color:{C_MUTED};">
@@ -411,14 +460,14 @@ def build_html(data: dict) -> str:
     leads_title  = "Top 3 high-potential leads" if not has_verified else "Top 3 — includes verified Best Deal(s)"
     leads_html = f"<h2 style='color:{C_PRIMARY};margin-bottom:12px;'>{leads_title}</h2>"
     leads_html += "".join(
-        _listing_card(l, i + 1, is_lead=True) for i, l in enumerate(leads)
+        _listing_card(l, i + 1, is_lead=True, ref_project=l.get("_ref_project")) for i, l in enumerate(leads)
     )
     leads_html += _dd_checklist()
 
     # ── Top 10 full list ────────────────────────────────────────────────────
     top10_html = f"<h2 style='color:{C_PRIMARY};margin:32px 0 12px;'>Top 10 ranked opportunities</h2>"
     top10_html += "".join(
-        _listing_card(l, i + 1) for i, l in enumerate(top10)
+        _listing_card(l, i + 1, ref_project=l.get("_ref_project")) for i, l in enumerate(top10)
     )
 
     # ── Needs data section ───────────────────────────────────────────────────
