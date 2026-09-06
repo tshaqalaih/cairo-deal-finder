@@ -64,10 +64,10 @@ def check(
     bua = listing.get("bua_sqm")
     if bua is None:
         return "needs_data", "BUA / area unknown"
-    if bua < 140:
-        return "excluded", f"BUA {bua} sqm below 140 sqm minimum"
-    if bua > 210:
-        return "excluded", f"BUA {bua} sqm above 210 sqm maximum"
+    if bua < config.MIN_BUA_SQM:
+        return "excluded", f"BUA {bua} sqm below {config.MIN_BUA_SQM} sqm minimum"
+    if bua > config.MAX_BUA_SQM:
+        return "excluded", f"BUA {bua} sqm above {config.MAX_BUA_SQM} sqm maximum"
 
     # ── 5. Price basis / seller cash ──────────────────────────────────────
     if listing.get("seller_cash_required_now") is None:

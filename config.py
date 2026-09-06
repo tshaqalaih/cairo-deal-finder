@@ -22,12 +22,13 @@ TELEGRAM_CHAT_ID  = os.environ.get("TELEGRAM_CHAT_ID", "")
 MAX_CASH_EQUIVALENT_EGP = 7_000_000   # Total acquisition cost ceiling
 MAX_UPFRONT_CASH_EGP    = 4_000_000   # Day-1 cash ceiling (flag, not gate)
 NPV_DISCOUNT_RATE_DEFAULT = 0.25      # 25% annual; shown alongside 20% and 30%
+MIN_BUA_SQM = 140                     # Minimum built-up area
+MAX_BUA_SQM = 220                     # Maximum built-up area (raised from 210)
 
 # ── Scraper behaviour ────────────────────────────────────────────────────────
 SCRAPER_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/120.0.0.0 Safari/537.36"
+    "CairoDealFinder/1.0 (personal research tool; "
+    "contact: info@example.com)"
 )
 SCRAPER_REQUEST_DELAY_S = 2.5         # Seconds between requests (polite)
 SCRAPER_MAX_PAGES       = 50          # Safety ceiling; ~1,000 listings per run

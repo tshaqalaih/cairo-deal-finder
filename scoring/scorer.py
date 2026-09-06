@@ -157,7 +157,7 @@ def _unit_quality_score(listing: dict, reasons: list[str]) -> UnitQualityScore:
     bua = listing.get("bua_sqm") or 0
     if 160 <= bua <= 185:
         uq.size_score = 3.0
-    elif 140 <= bua < 160 or 185 < bua <= 210:
+    elif 140 <= bua < 160 or 185 < bua <= 220:
         uq.size_score = 2.0
     else:
         uq.size_score = 0.0

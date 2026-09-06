@@ -73,8 +73,8 @@ def row(label: str, value: str, bg: str = "") -> str:
     """One two-column table row."""
     style = ' style="background:' + bg + ';"' if bg else ""
     return ('<tr' + style + '>'
-            '<td style="padding:5px 8px;font-size:12px;color:' + C_MUTED + ';">' + label + '</td>'
-            '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;">' + value + '</td>'
+            '<td style="padding:5px 8px;font-size:12px;color:#555 !important;">' + label + '</td>'
+            '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;color:#212529 !important;">' + value + '</td>'
             '</tr>')
 
 
@@ -85,13 +85,13 @@ def table(rows_html: str) -> str:
 
 def section_box(title: str, body_html: str, bg: str, border: str) -> str:
     return ('<div style="margin-top:10px;padding:10px;background:' + bg
-            + ';border-left:3px solid ' + border + ';border-radius:0 4px 4px 0;font-size:12px;">'
-            '<div style="font-weight:bold;margin-bottom:6px;color:' + C_PRIMARY + ';">' + title + '</div>'
+            + ' !important;border-left:3px solid ' + border + ';border-radius:0 4px 4px 0;font-size:12px;color:#212529 !important;">'
+            '<div style="font-weight:bold;margin-bottom:6px;color:#1a1a2e !important;">' + title + '</div>'
             + body_html + '</div>')
 
 
 def li(text: str) -> str:
-    return '<li style="margin-bottom:3px;">' + text + '</li>'
+    return '<li style="margin-bottom:3px;color:#212529 !important;">' + text + '</li>'
 
 
 def ul(items: list) -> str:
@@ -348,7 +348,7 @@ def build_card(listing: dict, rank: int, is_lead: bool = False) -> str:
     ref = listing.get("_ref_project")
 
     html = (
-        '<div style="border:2px solid ' + border + ';border-radius:8px;padding:16px;margin-bottom:16px;background:' + C_CARD + ';">'
+        '<div style="border:2px solid ' + border + ';border-radius:8px;padding:16px;margin-bottom:16px;background:' + C_CARD + ' !important;color:#212529 !important;">'
 
         # Header row (table for email compatibility)
         '<table cellpadding="0" cellspacing="0" style="width:100%;">'
@@ -496,10 +496,10 @@ def build_html(data: dict) -> str:
     )
 
     return (
-        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light">'
         '<meta name="viewport" content="width=device-width,initial-scale=1"></head>'
         '<body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;'
-        'max-width:680px;margin:0 auto;padding:14px;background:' + C_BG + ';color:#212529;">'
+        'max-width:680px;margin:0 auto;padding:14px;background:' + C_BG + ' !important;color:#212529 !important;">'
         + header + leads_html + top10_html + nd_html + footer +
         '</body></html>'
     )
@@ -512,5 +512,5 @@ def build_subject(data: dict) -> str:
     proj  = (top.get("project_name_raw") or "—") if top else "—"
     ce25  = top.get("latest_cash_equivalent_25") if top else None
     price = egp(ce25) if ce25 else "—"
-    date  = data.get("run_date") or ""
-    return "[" + str(date) + "] Top deal: " + str(proj) + " — Score " + str(score) + "/100 — " + price
+    run_dt = data.get("run_datetime") or data.get("run_date") or ""
+    return "[" + str(run_dt) + "] Top deal: " + str(proj) + " — Score " + str(score) + "/100 — " + price
