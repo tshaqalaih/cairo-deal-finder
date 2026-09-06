@@ -127,9 +127,9 @@ def build_intel_section(ref: dict | None) -> str:
     }
 
     items = [
-        li("Community: " + m_map.get(maturity, "❓ Unknown")),
-        li("Resale liquidity: " + l_map.get(liquidity, "❓ Unknown")),
-        li("Developer delivery: " + d_map.get(delivery, "❓ Unknown")),
+        li("<strong>Community:</strong> " + m_map.get(maturity, "❓ Unknown")),
+        li("<strong>Resale liquidity:</strong> " + l_map.get(liquidity, "❓ Unknown")),
+        li("<strong>Developer delivery:</strong> " + d_map.get(delivery, "❓ Unknown")),
     ]
     if notes:
         items.append(li("📝 " + esc(notes)))
@@ -142,11 +142,11 @@ def build_verify_section(listing: dict) -> str:
     items = []
 
     if listing.get("view_type", "not_specified") == "not_specified":
-        items.append(li("❓ View type unknown — ask seller or check on-site"))
+        items.append(li("❓ <strong>View type</strong> unknown — ask seller or check on-site"))
     if listing.get("parking_included", "not_specified") == "not_specified":
-        items.append(li("❓ Parking status unknown — confirm with seller"))
+        items.append(li("❓ <strong>Parking status</strong> unknown — confirm with seller"))
     if listing.get("finishing_status", "not_specified") == "not_specified":
-        items.append(li("❓ Finishing status not specified — verify on-site"))
+        items.append(li("❓ <strong>Finishing status</strong> not specified — verify on-site"))
 
     overdue = listing.get("known_overdue_amounts") or 0
     try:
@@ -154,14 +154,14 @@ def build_verify_section(listing: dict) -> str:
     except (TypeError, ValueError):
         overdue = 0
     if overdue > 0:
-        items.append(li("⚠️ Overdue installments: " + egp(overdue) + " — must be cleared before transfer"))
+        items.append(li("⚠️ <strong>Overdue installments:</strong> " + egp(overdue) + " — must be cleared before transfer"))
 
     if listing.get("upfront_exceeds_limit"):
-        items.append(li("⚠️ Day-1 cash exceeds your EGP 4M limit — confirm you can cover this"))
+        items.append(li("⚠️ <strong>Day-1 cash</strong> exceeds your EGP 4M limit — confirm you can cover this"))
 
     delivery_raw = str(listing.get("delivery_date_raw") or "")
     if any(y in delivery_raw for y in ["2025", "2026"]):
-        items.append(li("📋 Delivery " + esc(delivery_raw) + " — verify actual date directly with developer"))
+        items.append(li("📋 <strong>Delivery</strong> " + esc(delivery_raw) + " — verify actual date directly with developer"))
 
     confidence = listing.get("latest_data_confidence") or 0
     try:
@@ -169,11 +169,11 @@ def build_verify_section(listing: dict) -> str:
     except (TypeError, ValueError):
         confidence = 0
     if confidence < 0.85:
-        items.append(li("📋 Data confidence " + "{:.0%}".format(confidence) + " — some fields may be incomplete"))
+        items.append(li("📋 <strong>Data confidence</strong> " + "{:.0%}".format(confidence) + " — some fields may be incomplete"))
 
     scoring = listing.get("_scoring") or {}
     if (scoring.get("comparable_cluster_count") or 0) == 0:
-        items.append(li("📋 No comparable clusters yet — get 3 independent price quotes before committing"))
+        items.append(li("📋 <strong>No comparable clusters</strong> yet — get 3 independent price quotes before committing"))
 
     # Estimated costs
     entry_type = listing.get("entry_type") or "compound"
@@ -210,11 +210,11 @@ def build_verify_section(listing: dict) -> str:
     else:
         transfer = "Developer transfer fee: confirm with developer"
 
-    cost_items = [li("💰 Maintenance: " + m_note)]
+    cost_items = [li("💰 <strong>Maintenance:</strong> " + m_note)]
     if club:
-        cost_items.append(li("💰 " + club))
-    cost_items.append(li("💰 " + transfer))
-    cost_items.append(li("💰 Legal/notarization: EGP 5,000–20,000"))
+        cost_items.append(li("💰 <strong>Club membership:</strong> " + club.split(":")[1].strip() if ":" in club else "💰 " + club))
+    cost_items.append(li("💰 <strong>Developer transfer fee:</strong> " + transfer.split(":",1)[1].strip() if ":" in transfer else "💰 " + transfer))
+    cost_items.append(li("💰 <strong>Legal/notarization:</strong> EGP 5,000–20,000"))
 
     body = ""
     if items:
@@ -327,8 +327,7 @@ def build_score_section(listing: dict, score: int, anchor: str) -> str:
     return ('<div style="margin-top:8px;">'
             '<table cellpadding="0" cellspacing="0" style="width:100%;"><tr>'
             '<td style="color:' + C_MUTED + ';font-size:11px;">Score breakdown</td>'
-            '<td style="text-align:right;font-size:11px;"><a href="#' + anchor
-            + '" style="color:' + C_ACCENT + ';">Full breakdown ↓</a></td>'
+            '<td style="text-align:right;font-size:11px;color:' + C_MUTED + ';">Full detail in appendix below ↓</td>'
             '</tr></table>'
             + table(rows_html) + '</div>')
 
@@ -514,9 +513,15 @@ def build_card(listing: dict, rank: int, is_lead: bool = False, anchor: str = ""
 
         # Unit summary
         '<div style="margin:10px 0;padding:8px 10px;background:' + C_BG + ';border-radius:5px;font-size:12px;">'
-        '<strong>' + ptype + '</strong> · ' + str(beds) + ' BR · ' + str(bua) + ' m² · Floor ' + str(floor)
-        + ' · ' + view + ' · ' + finish + ' · Delivery ' + delivery + flags_html +
-        '</div>'
+        '<strong>' + ptype + '</strong>'
+        + ' · ' + str(beds) + ' BR'
+        + ' · ' + str(bua) + ' m²'
+        + ' · Floor ' + str(floor)
+        + (' · <span style="color:#888 !important;">View: unknown</span>' if view == 'not specified' else ' · ' + view)
+        + (' · <span style="color:#888 !important;">Finishing: unknown</span>' if finish == 'not specified' else ' · ' + finish)
+        + (' · <span style="color:#888 !important;">Delivery: unknown</span>' if delivery == '—' else ' · Delivery ' + delivery)
+        + flags_html
+        + '</div>'
 
         + build_financial_section(listing)
         + build_score_section(listing, score, anchor + '-bd')
