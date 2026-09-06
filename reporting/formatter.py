@@ -299,6 +299,65 @@ def build_financial_section(listing: dict) -> str:
     return table(rows_html) + table(ce_rows)
 
 
+
+def build_seller_questions(listing: dict) -> str:
+    """Copy-paste-ready Arabic questions for the Aqar Exit interest form."""
+    qs = []
+
+    # Always: developer statement + assignment rules (the two [BD] items only the seller can unlock)
+    qs.append("هل يمكن الحصول على كشف حساب رسمي من المطور يوضح المدفوع والمتبقي ومواعيد الأقساط بالضبط؟")
+    qs.append("هل المطور يسمح بالتنازل حالياً؟ وما هي رسوم التنازل والمستندات المطلوبة ومدة الإجراء؟")
+
+    # Overdue
+    overdue = listing.get("known_overdue_amounts") or 0
+    try:
+        overdue = float(overdue)
+    except (TypeError, ValueError):
+        overdue = 0
+    if overdue > 0:
+        qs.append("الإعلان يذكر أقساط متأخرة بقيمة " + "{:,.0f}".format(overdue)
+                  + " جنيه — هل يوجد غرامات تأخير إضافية؟ ومن يتحمل سدادها قبل التنازل؟")
+    else:
+        qs.append("هل يوجد أي أقساط متأخرة أو غرامات أو مستحقات غير مسددة على الوحدة؟")
+
+    # Delivery
+    delivery_raw = str(listing.get("delivery_date_raw") or "")
+    status = listing.get("delivery_status") or ""
+    if status == "ready_to_move":
+        qs.append("هل الوحدة مستلمة فعلياً؟ وهل العدادات (كهرباء/مياه/غاز) مركبة وباسم من؟")
+    elif delivery_raw:
+        qs.append("موعد التسليم المذكور " + delivery_raw + " — ما هو آخر موعد مؤكد من المطور كتابياً؟")
+    else:
+        qs.append("ما هو موعد التسليم المؤكد من المطور كتابياً؟")
+
+    # Unknowns that affect scoring
+    if listing.get("view_type", "not_specified") == "not_specified":
+        qs.append("ما هو فيو الوحدة بالضبط (حديقة / بحيرة / شارع / داخلي)؟ وهل يوجد مبانٍ مقابلة تحجب الإطلالة؟")
+    if listing.get("parking_included", "not_specified") == "not_specified":
+        qs.append("هل يوجد جراج/موقف سيارة ضمن العقد؟ أم برسوم منفصلة وكم قيمتها؟")
+    if listing.get("finishing_status", "not_specified") in ("not_specified", "core_and_shell"):
+        qs.append("ما هي حالة التشطيب الفعلية الآن؟ وهل توجد أعمال تشطيب مدفوعة للمطور ضمن العقد؟")
+
+    # Always: maintenance + club + ownership
+    qs.append("كم رسوم الصيانة السنوية؟ وهل يوجد وديعة صيانة أو عضوية نادي مطلوبة عند التنازل وكم قيمتها؟")
+    qs.append("هل المالك هو المشتري الأصلي في عقد المطور؟ وهل يوجد شريك أو زوج/زوجة على العقد يلزم توقيعه؟")
+    qs.append("هل تم سداد الدفعة الأخيرة في موعدها؟ وهل تقبل التفاوض على الكاش المطلوب؟")
+
+    numbered = "\n".join(str(i + 1) + ". " + q for i, q in enumerate(qs))
+
+    return (
+        '<div style="margin-top:10px;padding:10px;background:#eef7f2 !important;'
+        'border-left:3px solid ' + C_GREEN + ';border-radius:0 4px 4px 0;font-size:12px;color:#212529 !important;">'
+        '<div style="font-weight:bold;margin-bottom:4px;color:#1a1a2e !important;">'
+        'أسئلة للبائع — انسخ والصق في نموذج Aqar Exit</div>'
+        '<div style="font-size:11px;color:#555 !important;margin-bottom:6px;">'
+        'Questions for the seller — copy into the "question to the owner" field</div>'
+        '<pre dir="rtl" style="white-space:pre-wrap;font-family:inherit;font-size:12px;'
+        'margin:0;padding:8px;background:#ffffff !important;border:1px dashed #b7d3c3;'
+        'border-radius:4px;color:#212529 !important;text-align:right;">'
+        + esc(numbered) + '</pre></div>'
+    )
+
 def build_card(listing: dict, rank: int, is_lead: bool = False) -> str:
     """One listing card — email-safe HTML."""
     project = esc(listing.get("project_name_raw") or "Unknown project")
@@ -380,6 +439,7 @@ def build_card(listing: dict, rank: int, is_lead: bool = False) -> str:
         + build_score_section(listing, score)
         + build_intel_section(ref)
         + build_verify_section(listing)
+        + build_seller_questions(listing)
 
         + '<div style="margin-top:10px;font-size:12px;">'
         '<a href="' + url + '" style="color:' + C_ACCENT + ';">View on Aqar Exit →</a>'
