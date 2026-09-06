@@ -421,13 +421,17 @@ def build_financial_section(listing: dict) -> str:
     discount = (listing.get("_scoring") or {}).get("discount_to_median_pct")
 
     total_colour = C_ACCENT if exceeds else C_GREEN
+    # Grand total = all money that will ever leave your account (undiscounted)
+    grand_total = (cash or 0) + (float(remaining or 0)) + (float(ae_fee or 0))
     rows_html = (
         row("Cash to seller now", egp(cash), C_BG)
         + row("Remaining with developer (future)", egp(remaining))
         + row("Aqar Exit fee (1.25%)", egp(ae_fee), C_BG)
-        + ('<tr style="border-top:2px solid ' + C_BORDER + ';"><td style="padding:7px 8px;font-size:13px;font-weight:bold;color:#1a1a2e !important;">Total required NOW (day 1)</td>'
-           '<td style="padding:7px 8px;font-size:15px;text-align:right;font-weight:bold;color:' + total_colour + ' !important;white-space:nowrap;">' + egp(total) + '</td></tr>')
-        + ('<tr style="border-top:1px dashed ' + C_BORDER + ';"><td style="padding:5px 8px;font-size:11px;color:#555 !important;">Total acquisition cost (cash-equiv @ 25%)</td>'
+        + ('<tr style="border-top:2px solid ' + C_BORDER + ';"><td style="padding:7px 8px;font-size:13px;font-weight:bold;color:#1a1a2e !important;">Total you will ever pay</td>'
+           '<td style="padding:7px 8px;font-size:15px;text-align:right;font-weight:bold;color:#1a1a2e !important;white-space:nowrap;">' + egp(grand_total) + '</td></tr>')
+        + ('<tr><td style="padding:4px 8px;font-size:11px;color:#555 !important;">↳ Required on day 1</td>'
+           '<td style="padding:4px 8px;font-size:12px;text-align:right;color:' + total_colour + ' !important;font-weight:bold;white-space:nowrap;">' + egp(total) + '</td></tr>')
+        + ('<tr style="border-top:1px dashed ' + C_BORDER + ';"><td style="padding:5px 8px;font-size:11px;color:#555 !important;">Cash-equivalent @ 25% (ranking figure)</td>'
            '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;color:#1a1a2e !important;white-space:nowrap;">' + egp(ce25) + '</td></tr>')
     )
     if exceeds:
