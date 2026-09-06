@@ -146,7 +146,13 @@ def _enrich_with_scoring_run(db, listing: dict) -> None:
             "total_score, comparables_score, unit_quality_score, "
             "project_quality_score, payment_terms_score, urgency_score, "
             "comparable_cluster_count, comparable_median_25, discount_to_median_pct, "
-            "stage1_eligible, stage1_failure_reasons, data_confidence_score"
+            "stage1_eligible, stage1_failure_reasons, data_confidence_score, "
+            "uq_type_score, uq_size_score, uq_bedrooms_score, uq_view_score, "
+            "uq_floor_outdoor_score, uq_parking_score, uq_finishing_score, uq_delivery_score, "
+            "pq_developer_score, pq_maturity_score, pq_delivery_cred_score, "
+            "pq_liquidity_score, pq_location_score, "
+            "pt_cash_discount_score, pt_upfront_burden_score, "
+            "pt_monthly_burden_score, pt_schedule_conf_score"
         )
         .eq("listing_id", listing["id"])
         .eq("eligibility_status", "eligible")

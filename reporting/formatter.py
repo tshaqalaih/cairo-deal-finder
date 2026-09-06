@@ -225,8 +225,87 @@ def build_verify_section(listing: dict) -> str:
     return section_box("What to check for this unit", body, C_VERIFY, "#f59e0b")
 
 
-def build_score_section(listing: dict, score: int) -> str:
-    s = listing.get("_scoring") or {}
+def build_score_detail(listing: dict, score: int) -> str:
+    """Full score breakdown with sub-factors — rendered in the appendix."""
+    sc = listing.get("_scoring") or {}
+
+    def f1(v):
+        try:
+            return "{:.1f}".format(float(v or 0))
+        except (TypeError, ValueError):
+            return "0.0"
+
+    def head(label, val, mx):
+        return ('<tr style="background:' + C_BG + ';">'
+                '<td style="padding:5px 8px;font-size:12px;font-weight:bold;color:#1a1a2e !important;">' + label + '</td>'
+                '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;color:#1a1a2e !important;white-space:nowrap;">'
+                + f1(val) + ' / ' + str(mx) + '</td></tr>')
+
+    def sub(label, val, mx, hint=""):
+        h = ('<span style="color:#888 !important;font-size:11px;"> — ' + esc(hint) + '</span>') if hint else ""
+        return ('<tr><td style="padding:3px 8px 3px 22px;font-size:11px;color:#555 !important;">' + label + h + '</td>'
+                '<td style="padding:3px 8px;font-size:11px;text-align:right;color:#212529 !important;white-space:nowrap;">'
+                + f1(val) + ' / ' + str(mx) + '</td></tr>')
+
+    # Hints derived from listing fields so the reason is visible
+    ptype   = str(listing.get("property_type") or "")
+    bua     = listing.get("bua_sqm") or 0
+    beds    = listing.get("bedroom_count") or 0
+    view    = str(listing.get("view_type") or "not_specified").replace("_", " ")
+    finish  = str(listing.get("finishing_status") or "not_specified").replace("_", " ")
+    deliv   = str(listing.get("delivery_status") or "not_specified").replace("_", " ")
+    parking = str(listing.get("parking_included") or "not_specified").replace("_", " ")
+    years   = listing.get("installments_remaining_years")
+    ref     = listing.get("_ref_project") or {}
+    clusters = sc.get("comparable_cluster_count") or 0
+    disc    = sc.get("discount_to_median_pct")
+
+    comp_hint = (str(clusters) + " clusters" + (", " + pct(disc) + " vs median" if disc is not None else "")
+                 if clusters >= 3 else "needs 3+ comparable clusters (" + str(clusters) + " found)")
+
+    rows_html = (
+        head("Value vs comparables", sc.get("comparables_score"), 40)
+        + sub("Cluster median comparison", sc.get("comparables_score"), 40, comp_hint)
+
+        + head("Unit quality", sc.get("unit_quality_score"), 20)
+        + sub("Type", sc.get("uq_type_score"), 3, ptype)
+        + sub("Size", sc.get("uq_size_score"), 3, str(bua) + " m² (160–185 = full)")
+        + sub("Bedrooms", sc.get("uq_bedrooms_score"), 3, str(beds) + " BR (4BR = full)")
+        + sub("View", sc.get("uq_view_score"), 3, view)
+        + sub("Floor / outdoor", sc.get("uq_floor_outdoor_score"), 3, "roof 3 · garden 2 · open view 2")
+        + sub("Parking", sc.get("uq_parking_score"), 2, parking)
+        + sub("Finishing", sc.get("uq_finishing_score"), 2, finish)
+        + sub("Delivery status", sc.get("uq_delivery_score"), 1, deliv)
+
+        + head("Project quality", sc.get("project_quality_score"), 20)
+        + sub("Developer track record", sc.get("pq_developer_score"), 5, str(ref.get("delivery_track_record") or "unknown"))
+        + sub("Maturity / community", sc.get("pq_maturity_score"), 5, str(ref.get("project_maturity") or "unknown"))
+        + sub("Delivery credibility", sc.get("pq_delivery_cred_score"), 4, deliv)
+        + sub("Resale liquidity", sc.get("pq_liquidity_score"), 3, str(ref.get("liquidity_tier") or "unknown"))
+        + sub("Location", sc.get("pq_location_score"), 3,
+              "Ring Rd NW " + str(ref.get("ring_road_nw_access") or "?") + " · 90th S " + str(ref.get("southern_90th_proximity") or "?"))
+
+        + head("Payment terms", sc.get("payment_terms_score"), 15)
+        + sub("Cash discount", sc.get("pt_cash_discount_score"), 5,
+              ("full cash" if not listing.get("remaining_with_developer") else str(years) + " yrs remaining (≤1 yr = 4, >3 yrs = 1)"))
+        + sub("Upfront burden", sc.get("pt_upfront_burden_score"), 4, "cash ÷ cash-equiv (≤20% = full)")
+        + sub("Annual payment burden", sc.get("pt_monthly_burden_score"), 3, "annual ÷ cash-equiv (≤8% = full)")
+        + sub("Schedule confidence", sc.get("pt_schedule_conf_score"), 3, str(listing.get("schedule_source") or "unknown").replace("_", " "))
+
+        + head("Seller urgency", sc.get("urgency_score"), 5)
+        + sub("Signals", sc.get("urgency_score"), 5, "negotiable 1.5 · price cut 1.5 · keywords 1 · multi-broker 0.5")
+
+        + '<tr style="border-top:2px solid ' + C_BORDER + ';">'
+          '<td style="padding:6px 8px;font-size:13px;font-weight:bold;color:#1a1a2e !important;">Total</td>'
+          '<td style="padding:6px 8px;font-size:13px;text-align:right;font-weight:bold;color:#1a1a2e !important;white-space:nowrap;">'
+          + str(score) + ' / 100</td></tr>'
+    )
+    return table(rows_html)
+
+
+def build_score_section(listing: dict, score: int, anchor: str) -> str:
+    """Compact 5-line summary shown in the card; links to full detail in appendix."""
+    sc = listing.get("_scoring") or {}
 
     def f1(v):
         try:
@@ -235,18 +314,22 @@ def build_score_section(listing: dict, score: int) -> str:
             return "0.0"
 
     rows_html = (
-        row("Value vs comparables", f1(s.get("comparables_score")) + " / 40")
-        + row("Unit quality", f1(s.get("unit_quality_score")) + " / 20", C_BG)
-        + row("Project quality", f1(s.get("project_quality_score")) + " / 20")
-        + row("Payment terms", f1(s.get("payment_terms_score")) + " / 15", C_BG)
-        + row("Seller urgency", f1(s.get("urgency_score")) + " / 5")
+        row("Value vs comparables", f1(sc.get("comparables_score")) + " / 40")
+        + row("Unit quality", f1(sc.get("unit_quality_score")) + " / 20", C_BG)
+        + row("Project quality", f1(sc.get("project_quality_score")) + " / 20")
+        + row("Payment terms", f1(sc.get("payment_terms_score")) + " / 15", C_BG)
+        + row("Seller urgency", f1(sc.get("urgency_score")) + " / 5")
         + '<tr style="border-top:1px solid ' + C_BORDER + ';">'
-          '<td style="padding:5px 8px;font-size:12px;font-weight:bold;">Total</td>'
-          '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;">'
+          '<td style="padding:5px 8px;font-size:12px;font-weight:bold;color:#1a1a2e !important;">Total</td>'
+          '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;color:#1a1a2e !important;white-space:nowrap;">'
           + str(score) + ' / 100</td></tr>'
     )
     return ('<div style="margin-top:8px;">'
-            '<div style="color:' + C_MUTED + ';font-size:11px;margin-bottom:2px;">Score breakdown</div>'
+            '<table cellpadding="0" cellspacing="0" style="width:100%;"><tr>'
+            '<td style="color:' + C_MUTED + ';font-size:11px;">Score breakdown</td>'
+            '<td style="text-align:right;font-size:11px;"><a href="#' + anchor
+            + '" style="color:' + C_ACCENT + ';">Full breakdown ↓</a></td>'
+            '</tr></table>'
             + table(rows_html) + '</div>')
 
 
@@ -358,7 +441,7 @@ def build_seller_questions(listing: dict) -> str:
         + esc(numbered) + '</pre></div>'
     )
 
-def build_card(listing: dict, rank: int, is_lead: bool = False) -> str:
+def build_card(listing: dict, rank: int, is_lead: bool = False, anchor: str = "") -> str:
     """One listing card — email-safe HTML."""
     project = esc(listing.get("project_name_raw") or "Unknown project")
     dev_raw = str(listing.get("developer_raw") or "")
@@ -407,7 +490,7 @@ def build_card(listing: dict, rank: int, is_lead: bool = False) -> str:
     ref = listing.get("_ref_project")
 
     html = (
-        '<div style="border:2px solid ' + border + ';border-radius:8px;padding:16px;margin-bottom:16px;background:' + C_CARD + ' !important;color:#212529 !important;">'
+        '<div id="' + anchor + '" style="border:2px solid ' + border + ';border-radius:8px;padding:16px;margin-bottom:16px;background:' + C_CARD + ' !important;color:#212529 !important;">'
 
         # Header row (table for email compatibility)
         '<table cellpadding="0" cellspacing="0" style="width:100%;">'
@@ -436,7 +519,7 @@ def build_card(listing: dict, rank: int, is_lead: bool = False) -> str:
         '</div>'
 
         + build_financial_section(listing)
-        + build_score_section(listing, score)
+        + build_score_section(listing, score, anchor + '-bd')
         + build_intel_section(ref)
         + build_verify_section(listing)
         + build_seller_questions(listing)
@@ -508,6 +591,24 @@ def build_needs_data(listings: list) -> str:
     )
 
 
+def build_breakdown_appendix(entries: list) -> str:
+    """entries: list of (anchor, title, listing, score). Full detail for each, with back-links."""
+    if not entries:
+        return ""
+    out = ('<h2 style="color:' + C_PRIMARY + ';font-size:17px;margin:32px 0 6px;">Appendix — full score breakdowns</h2>'
+           '<p style="color:' + C_MUTED + ';font-size:12px;margin:0 0 12px;">'
+           'Every sub-factor with the value it was scored on. Zeros marked "not specified" are unknowns, not negatives.</p>')
+    for anchor, title, listing, score in entries:
+        out += ('<div id="' + anchor + '-bd" style="border:1px solid ' + C_BORDER + ';border-radius:6px;padding:12px;margin-bottom:12px;'
+                'background:' + C_CARD + ' !important;color:#212529 !important;">'
+                '<table cellpadding="0" cellspacing="0" style="width:100%;"><tr>'
+                '<td style="font-weight:bold;font-size:13px;color:#1a1a2e !important;">' + title + '</td>'
+                '<td style="text-align:right;font-size:11px;"><a href="#' + anchor + '" style="color:' + C_ACCENT + ';">↑ Back to listing</a></td>'
+                '</tr></table>'
+                + build_score_detail(listing, score) + '</div>')
+    return out
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def build_html(data: dict) -> str:
@@ -528,9 +629,12 @@ def build_html(data: dict) -> str:
     has_verified = any(l.get("is_stage1_eligible") for l in leads)
     leads_title = "Top 3 — includes verified Best Deal(s)" if has_verified else "Top 3 high-potential leads"
     leads_html = '<h2 style="color:' + C_PRIMARY + ';font-size:17px;margin-bottom:10px;">' + leads_title + '</h2>'
+    appendix_entries = []
     for i, l in enumerate(leads):
+        anchor = "lead-" + str(i + 1)
         try:
-            leads_html += build_card(l, i + 1, is_lead=True)
+            leads_html += build_card(l, i + 1, is_lead=True, anchor=anchor)
+            appendix_entries.append((anchor, "#" + str(i + 1) + " " + esc(l.get("project_name_raw") or "") + " (Top 3)", l, int(l.get("latest_score") or 0)))
         except Exception as e:
             leads_html += ('<div style="color:red;padding:10px;">Card error #' + str(i + 1) + ': ' + esc(str(e)) + '</div>')
 
@@ -538,12 +642,15 @@ def build_html(data: dict) -> str:
 
     top10_html = '<h2 style="color:' + C_PRIMARY + ';font-size:17px;margin:28px 0 10px;">Top 10 ranked opportunities</h2>'
     for i, l in enumerate(top10):
+        anchor = "top-" + str(i + 1)
         try:
-            top10_html += build_card(l, i + 1)
+            top10_html += build_card(l, i + 1, anchor=anchor)
+            appendix_entries.append((anchor, "#" + str(i + 1) + " " + esc(l.get("project_name_raw") or ""), l, int(l.get("latest_score") or 0)))
         except Exception as e:
             top10_html += ('<div style="color:red;padding:10px;">Card error #' + str(i + 1) + ': ' + esc(str(e)) + '</div>')
 
     nd_html = build_needs_data(needs_data)
+    appendix_html = build_breakdown_appendix(appendix_entries)
 
     footer = (
         '<div style="border-top:1px solid ' + C_BORDER + ';margin-top:28px;padding-top:14px;'
@@ -560,7 +667,7 @@ def build_html(data: dict) -> str:
         '<meta name="viewport" content="width=device-width,initial-scale=1"></head>'
         '<body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;'
         'max-width:680px;margin:0 auto;padding:14px;background:' + C_BG + ' !important;color:#212529 !important;">'
-        + header + leads_html + top10_html + nd_html + footer +
+        + header + leads_html + top10_html + nd_html + appendix_html + footer +
         '</body></html>'
     )
 
