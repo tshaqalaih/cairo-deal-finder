@@ -212,7 +212,10 @@ def _listing_card(listing: dict, rank: int, is_lead: bool = False, ref_project: 
     s = listing.get("_scoring", {})
 
     project    = listing.get("project_name_raw") or "Unknown project"
-    dev        = listing.get("developer_raw") or ""
+    dev_raw    = listing.get("developer_raw") or ""
+    # Strip page title artifacts — dev_raw may contain "Project — Type size" format
+    # Keep only the part before " — " and before the first "·"
+    dev        = dev_raw.split(" — ")[0].split(" · ")[0].strip() if dev_raw else "" 
     loc        = listing.get("location_raw") or ""
     entry_type = listing.get("entry_type", "compound")
     entry_labels = {"compound": "🏘 Compound", "neighborhood": "🏙 Neighborhood", "small_compound": "🏠 Small Compound"}
@@ -364,7 +367,7 @@ def _listing_card(listing: dict, rank: int, is_lead: bool = False, ref_project: 
         </table>
       </details>
 
-      {_build_project_intel(listing, ref_project)}
+      {_build_project_intel(listing, ref_project) or ''}
       {_build_verify_section(listing, overdue_str)}
 
       <div style="margin-top:12px;font-size:12px;color:{C_MUTED};">
