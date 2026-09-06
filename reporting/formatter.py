@@ -1,515 +1,516 @@
 """
-HTML email formatter for the daily report.
+HTML email formatter for the daily report — v9.
 
-Produces a clean, readable HTML email with:
-  1. Top 10 ranked opportunities
-  2. Top 3 high-potential leads / verified Best Deals
-  3. Comparables used per valuation
-  4. Cash-equivalent at 20/25/30%
-  5. Score breakdown
-  6. Due diligence checklist reminder
-  7. Needs-data queue
+Rebuilt from scratch with string concatenation (no large f-strings).
+Uses only email-safe HTML: tables, divs, inline styles. No <details>, no flexbox.
+Every section is built by a separate function that returns a plain string.
 """
 from __future__ import annotations
-import config
+
+# ── Palette ───────────────────────────────────────────────────────────────────
+C_BG      = "#f8f9fa"
+C_CARD    = "#ffffff"
+C_BORDER  = "#dee2e6"
+C_PRIMARY = "#1a1a2e"
+C_ACCENT  = "#e63946"
+C_GREEN   = "#2d6a4f"
+C_AMBER   = "#d4a017"
+C_MUTED   = "#6c757d"
+C_FLAG    = "#fff3cd"
+C_INTEL   = "#f0f4ff"
+C_VERIFY  = "#fff8e1"
 
 
-# ── Colour palette ────────────────────────────────────────────────────────────
-C_BG       = "#f8f9fa"
-C_CARD     = "#ffffff"
-C_BORDER   = "#dee2e6"
-C_PRIMARY  = "#1a1a2e"
-C_ACCENT   = "#e63946"
-C_GREEN    = "#2d6a4f"
-C_AMBER    = "#d4a017"
-C_MUTED    = "#6c757d"
-C_UPFRONT_FLAG = "#fff3cd"   # Yellow — upfront exceeds limit
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-
-def _egp(amount) -> str:
-    if amount is None:
+def egp(v) -> str:
+    if v is None:
         return "—"
-    return f"EGP {amount:,.0f}"
-
-
-def _pct(val) -> str:
-    if val is None:
+    try:
+        return "EGP " + "{:,.0f}".format(float(v))
+    except (TypeError, ValueError):
         return "—"
-    sign = "+" if val >= 0 else ""
-    return f"{sign}{val:.1f}%"
 
 
-def _score_bar(score: int, max_score: int = 100) -> str:
-    pct = min(100, int(score / max_score * 100))
-    colour = C_GREEN if pct >= 80 else (C_AMBER if pct >= 60 else C_ACCENT)
-    return (
-        f'<div style="background:#e9ecef;border-radius:4px;height:8px;width:120px;display:inline-block;vertical-align:middle;">'
-        f'<div style="background:{colour};width:{pct}%;height:8px;border-radius:4px;"></div></div>'
-        f' <span style="color:{colour};font-weight:bold;">{score}/100</span>'
-    )
+def pct(v) -> str:
+    if v is None:
+        return "—"
+    try:
+        v = float(v)
+        sign = "+" if v >= 0 else ""
+        return sign + "{:.1f}%".format(v)
+    except (TypeError, ValueError):
+        return "—"
 
 
-def _label_badge(label: str) -> str:
-    colour = C_GREEN if "Best Deal" in label else C_AMBER
-    return (
-        f'<span style="background:{colour};color:white;padding:2px 8px;'
-        f'border-radius:12px;font-size:11px;font-weight:bold;">{label}</span>'
-    )
+def esc(text) -> str:
+    """Escape HTML special characters."""
+    if text is None:
+        return ""
+    s = str(text)
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;"))
 
 
+def score_colour(score: int) -> str:
+    if score >= 80:
+        return C_GREEN
+    if score >= 60:
+        return C_AMBER
+    return C_ACCENT
 
-def _build_verify_section(listing: dict, overdue_amount: str) -> str:
-    """Build a per-listing 'What to check' section."""
+
+def score_display(score: int) -> str:
+    colour = score_colour(score)
+    return ('<span style="color:' + colour + ';font-weight:bold;font-size:18px;">'
+            + str(score) + '</span>'
+            + '<span style="color:' + C_MUTED + ';font-size:12px;"> / 100</span>')
+
+
+def row(label: str, value: str, bg: str = "") -> str:
+    """One two-column table row."""
+    style = ' style="background:' + bg + ';"' if bg else ""
+    return ('<tr' + style + '>'
+            '<td style="padding:5px 8px;font-size:12px;color:' + C_MUTED + ';">' + label + '</td>'
+            '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;">' + value + '</td>'
+            '</tr>')
+
+
+def table(rows_html: str) -> str:
+    return ('<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:8px 0;">'
+            + rows_html + '</table>')
+
+
+def section_box(title: str, body_html: str, bg: str, border: str) -> str:
+    return ('<div style="margin-top:10px;padding:10px;background:' + bg
+            + ';border-left:3px solid ' + border + ';border-radius:0 4px 4px 0;font-size:12px;">'
+            '<div style="font-weight:bold;margin-bottom:6px;color:' + C_PRIMARY + ';">' + title + '</div>'
+            + body_html + '</div>')
+
+
+def li(text: str) -> str:
+    return '<li style="margin-bottom:3px;">' + text + '</li>'
+
+
+def ul(items: list) -> str:
+    return '<ul style="margin:0;padding-left:16px;">' + "".join(items) + '</ul>'
+
+
+# ── Sections ──────────────────────────────────────────────────────────────────
+
+def build_intel_section(ref: dict | None) -> str:
+    """Project intelligence from reference dataset."""
+    if not ref:
+        return ""
+    maturity  = ref.get("project_maturity") or "unknown"
+    liquidity = ref.get("liquidity_tier") or "unknown"
+    delivery  = ref.get("delivery_track_record") or "unknown"
+    notes     = ref.get("notes") or ""
+
+    m_map = {
+        "established":    "✅ Established community — people living there, amenities active",
+        "emerging":       "🔄 Emerging — still developing, community not fully formed",
+        "new_standalone": "⚠️ New standalone — no track record yet",
+    }
+    l_map = {
+        "high":   "🟢 High resale liquidity — easy to sell if needed",
+        "medium": "🟡 Medium resale liquidity",
+        "low":    "🔴 Low resale liquidity — harder to exit",
+    }
+    d_map = {
+        "excellent": "✅ Excellent delivery track record",
+        "good":      "✅ Good delivery track record",
+        "fair":      "⚠️ Fair delivery track record — some delays reported",
+        "completed": "✅ Completed — fully delivered",
+    }
+
+    items = [
+        li("Community: " + m_map.get(maturity, "❓ Unknown")),
+        li("Resale liquidity: " + l_map.get(liquidity, "❓ Unknown")),
+        li("Developer delivery: " + d_map.get(delivery, "❓ Unknown")),
+    ]
+    if notes:
+        items.append(li("📝 " + esc(notes)))
+
+    return section_box("Project intelligence", ul(items), C_INTEL, "#4361ee")
+
+
+def build_verify_section(listing: dict) -> str:
+    """Per-listing checks and estimated costs."""
     items = []
 
-    # Missing fields that affect the score
     if listing.get("view_type", "not_specified") == "not_specified":
-        items.append(("❓", "View type unknown — ask seller or check on-site"))
+        items.append(li("❓ View type unknown — ask seller or check on-site"))
     if listing.get("parking_included", "not_specified") == "not_specified":
-        items.append(("❓", "Parking status unknown — confirm with seller"))
+        items.append(li("❓ Parking status unknown — confirm with seller"))
     if listing.get("finishing_status", "not_specified") == "not_specified":
-        items.append(("❓", "Finishing status not specified — verify on-site"))
-    if listing.get("floor_number") in (None, "not_specified", "—"):
-        items.append(("❓", "Floor number unknown"))
+        items.append(li("❓ Finishing status not specified — verify on-site"))
 
-    # Overdue amounts — always flag if present
-    overdue = listing.get("known_overdue_amounts", 0) or 0
+    overdue = listing.get("known_overdue_amounts") or 0
+    try:
+        overdue = float(overdue)
+    except (TypeError, ValueError):
+        overdue = 0
     if overdue > 0:
-        items.append(("⚠️", f"Overdue installments: EGP {overdue:,.0f} — must be cleared before transfer"))
+        items.append(li("⚠️ Overdue installments: " + egp(overdue) + " — must be cleared before transfer"))
 
-    # Upfront exceeds limit
     if listing.get("upfront_exceeds_limit"):
-        items.append(("⚠️", "Day-1 cash exceeds your EGP 4M limit — confirm you can cover this"))
+        items.append(li("⚠️ Day-1 cash exceeds your EGP 4M limit — confirm you can cover this"))
 
-    # Delivery soon or passed
-    delivery_raw = listing.get("delivery_date_raw") or ""
-    if delivery_raw and any(y in delivery_raw for y in ["2025", "2026"]):
-        items.append(("📋", f"Delivery {delivery_raw} — verify actual date directly with developer"))
+    delivery_raw = str(listing.get("delivery_date_raw") or "")
+    if any(y in delivery_raw for y in ["2025", "2026"]):
+        items.append(li("📋 Delivery " + esc(delivery_raw) + " — verify actual date directly with developer"))
 
-    # Data confidence
     confidence = listing.get("latest_data_confidence") or 0
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        confidence = 0
     if confidence < 0.85:
-        items.append(("📋", f"Data confidence {confidence:.0%} — some fields may be incomplete"))
+        items.append(li("📋 Data confidence " + "{:.0%}".format(confidence) + " — some fields may be incomplete"))
 
-    # No comparables
-    scoring = listing.get("_scoring", {})
-    if scoring.get("comparable_cluster_count", 0) == 0:
-        items.append(("📋", "No comparable clusters yet — get 3 independent price quotes before committing"))
+    scoring = listing.get("_scoring") or {}
+    if (scoring.get("comparable_cluster_count") or 0) == 0:
+        items.append(li("📋 No comparable clusters yet — get 3 independent price quotes before committing"))
 
-    # Estimated unknown costs
-    entry_type = listing.get("entry_type", "compound")
+    # Estimated costs
+    entry_type = listing.get("entry_type") or "compound"
     bua = listing.get("bua_sqm") or 0
-    project = (listing.get("project_name_raw") or "").lower()
+    try:
+        bua = float(bua)
+    except (TypeError, ValueError):
+        bua = 0
+    project = str(listing.get("project_name_raw") or "").lower()
 
-    # Maintenance estimate based on entry type and known projects
-    if entry_type == "compound":
-        # Known high-maintenance compounds
-        if any(p in project for p in ["hyde park", "هايد بارك", "mivida", "ميفيدا", "palm hills", "بالم هيلز", "mountain view", "lake view", "swan lake", "eastown", "villette"]):
-            maint_low  = int(bua * 500)
-            maint_high = int(bua * 800)
-        else:
-            maint_low  = int(bua * 300)
-            maint_high = int(bua * 600)
-        maint_note = f"~EGP {maint_low:,}–{maint_high:,}/year (compound maintenance estimate)"
-    elif entry_type == "neighborhood":
-        maint_low  = int(bua * 50)
-        maint_high = int(bua * 150)
-        maint_note = f"~EGP {maint_low:,}–{maint_high:,}/year (open neighborhood estimate)"
+    premium = any(p in project for p in [
+        "hyde park", "هايد بارك", "mivida", "ميفيدا", "palm hills", "بالم هيلز",
+        "mountain view", "ماونتن فيو", "lake view", "swan lake", "eastown", "villette",
+    ])
+    if entry_type == "neighborhood":
+        m_lo, m_hi = int(bua * 50), int(bua * 150)
+        m_note = "~EGP {:,}–{:,}/year (open neighborhood estimate)".format(m_lo, m_hi)
+        club = None
+    elif premium:
+        m_lo, m_hi = int(bua * 500), int(bua * 800)
+        m_note = "~EGP {:,}–{:,}/year (premium compound estimate)".format(m_lo, m_hi)
+        club = "Club membership: EGP 150,000–500,000 one-time (confirm with developer)"
     else:
-        maint_low  = int(bua * 200)
-        maint_high = int(bua * 500)
-        maint_note = f"~EGP {maint_low:,}–{maint_high:,}/year (estimate)"
+        m_lo, m_hi = int(bua * 300), int(bua * 600)
+        m_note = "~EGP {:,}–{:,}/year (compound estimate)".format(m_lo, m_hi)
+        club = "Club membership: EGP 150,000–500,000 one-time (confirm with developer)"
 
-    # Club membership
-    if entry_type == "compound":
-        club_note = "Club membership: EGP 150,000–500,000 one-time (confirm with developer)"
+    cash = float(listing.get("seller_cash_required_now") or 0)
+    remaining = float(listing.get("remaining_with_developer") or 0)
+    contract = cash + remaining
+    if contract > 0:
+        t_lo, t_hi = int(contract * 0.01), int(contract * 0.025)
+        transfer = "Developer transfer fee: ~EGP {:,}–{:,} (1–2.5% of contract value — confirm with developer)".format(t_lo, t_hi)
     else:
-        club_note = None
+        transfer = "Developer transfer fee: confirm with developer"
 
-    # Developer transfer fee
-    cash_now = listing.get("seller_cash_required_now") or 0
-    remaining = listing.get("remaining_with_developer") or 0
-    contract_value = cash_now + remaining
-    if contract_value > 0:
-        transfer_low  = int(contract_value * 0.01)
-        transfer_high = int(contract_value * 0.025)
-        transfer_note = f"Developer transfer fee: ~EGP {transfer_low:,}–{transfer_high:,} (1–2.5% of contract value — confirm with developer)"
-    else:
-        transfer_note = "Developer transfer fee: confirm with developer"
+    cost_items = [li("💰 Maintenance: " + m_note)]
+    if club:
+        cost_items.append(li("💰 " + club))
+    cost_items.append(li("💰 " + transfer))
+    cost_items.append(li("💰 Legal/notarization: EGP 5,000–20,000"))
 
-    if not items and not maint_note:
-        return ""
+    body = ""
+    if items:
+        body += ul(items)
+    body += ('<div style="font-weight:bold;margin:8px 0 4px;color:' + C_PRIMARY + ';">'
+             'Estimated costs not in cash-equivalent</div>' + ul(cost_items))
 
-    rows = "".join(
-        f'<li style="margin-bottom:3px;">'
-        f'<span style="margin-right:4px;">{icon}</span>{text}</li>'
-        for icon, text in items
+    return section_box("What to check for this unit", body, C_VERIFY, "#f59e0b")
+
+
+def build_score_section(listing: dict, score: int) -> str:
+    s = listing.get("_scoring") or {}
+
+    def f1(v):
+        try:
+            return "{:.1f}".format(float(v or 0))
+        except (TypeError, ValueError):
+            return "0.0"
+
+    rows_html = (
+        row("Value vs comparables", f1(s.get("comparables_score")) + " / 40")
+        + row("Unit quality", f1(s.get("unit_quality_score")) + " / 20", C_BG)
+        + row("Project quality", f1(s.get("project_quality_score")) + " / 20")
+        + row("Payment terms", f1(s.get("payment_terms_score")) + " / 15", C_BG)
+        + row("Seller urgency", f1(s.get("urgency_score")) + " / 5")
+        + '<tr style="border-top:1px solid ' + C_BORDER + ';">'
+          '<td style="padding:5px 8px;font-size:12px;font-weight:bold;">Total</td>'
+          '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;">'
+          + str(score) + ' / 100</td></tr>'
     )
-
-    cost_rows = f'<li style="margin-bottom:3px;">💰 Maintenance: {maint_note}</li>'
-    if club_note:
-        cost_rows += f'<li style="margin-bottom:3px;">💰 {club_note}</li>'
-    cost_rows += f'<li style="margin-bottom:3px;">💰 {transfer_note}</li>'
-    cost_rows += f'<li style="margin-bottom:3px;">💰 Legal/notarization: EGP 5,000–20,000</li>'
-
-    return f"""
-      <div style="margin-top:12px;padding:10px;background:#fff8e1;border-left:3px solid #f59e0b;border-radius:0 4px 4px 0;font-size:12px;">
-        <div style="font-weight:bold;margin-bottom:6px;color:#92400e;">What to check for this unit</div>
-        {f'<ul style="margin:0 0 8px 0;padding-left:16px;color:#78350f;">{rows}</ul>' if items else ''}
-        <div style="font-weight:bold;margin:6px 0 4px;color:#92400e;">Estimated costs not in cash-equivalent</div>
-        <ul style="margin:0;padding-left:16px;color:#78350f;">{cost_rows}</ul>
-      </div>"""
+    return ('<div style="margin-top:8px;">'
+            '<div style="color:' + C_MUTED + ';font-size:11px;margin-bottom:2px;">Score breakdown</div>'
+            + table(rows_html) + '</div>')
 
 
-def _build_project_intel(listing: dict, ref_project: dict | None) -> str:
-    """Build project intelligence section from reference dataset."""
-    if not ref_project:
-        return ""
-
-    maturity   = ref_project.get("project_maturity", "unknown")
-    liquidity  = ref_project.get("liquidity_tier", "unknown")
-    delivery   = ref_project.get("delivery_track_record", "unknown")
-    notes      = ref_project.get("notes", "")
-
-    maturity_labels = {
-        "established": ("✅", "Established community — people living there, amenities active"),
-        "emerging":    ("🔄", "Emerging — still developing, community not yet fully formed"),
-        "new_standalone": ("⚠️", "New standalone — no track record yet"),
-        "unknown":     ("❓", "Community status unknown"),
-    }
-    liquidity_labels = {
-        "high":    ("🟢", "High resale liquidity — easy to sell if needed"),
-        "medium":  ("🟡", "Medium resale liquidity"),
-        "low":     ("🔴", "Low resale liquidity — harder to exit"),
-        "unknown": ("❓", "Resale liquidity unknown"),
-    }
-    delivery_labels = {
-        "excellent": ("✅", "Excellent delivery track record"),
-        "good":      ("✅", "Good delivery track record"),
-        "fair":      ("⚠️", "Fair delivery track record — some delays reported"),
-        "completed": ("✅", "Completed — fully delivered"),
-        "unknown":   ("❓", "Delivery track record unknown"),
-    }
-
-    m_icon, m_text = maturity_labels.get(maturity, ("❓", maturity))
-    l_icon, l_text = liquidity_labels.get(liquidity, ("❓", liquidity))
-    d_icon, d_text = delivery_labels.get(delivery, ("❓", delivery))
-
-    notes_html = f'<li style="margin-bottom:3px;">📝 {notes}</li>' if notes else ""
-
-    return f"""
-      <div style="margin-top:10px;padding:10px;background:#f0f4ff;border-left:3px solid #4361ee;border-radius:0 4px 4px 0;font-size:12px;">
-        <div style="font-weight:bold;margin-bottom:6px;color:#1a1a2e;">Project intelligence</div>
-        <ul style="margin:0;padding-left:16px;color:#333;">
-          <li style="margin-bottom:3px;">{m_icon} Community: {m_text}</li>
-          <li style="margin-bottom:3px;">{l_icon} Resale liquidity: {l_text}</li>
-          <li style="margin-bottom:3px;">{d_icon} Developer delivery: {d_text}</li>
-          {notes_html}
-        </ul>
-      </div>"""
-
-def _listing_card(listing: dict, rank: int, is_lead: bool = False, ref_project: dict | None = None) -> str:
-    s = listing.get("_scoring", {})
-
-    project    = listing.get("project_name_raw") or "Unknown project"
-    dev_raw    = listing.get("developer_raw") or ""
-    # Strip page title artifacts — dev_raw may contain "Project — Type size" format
-    # Keep only the part before " — " and before the first "·"
-    dev        = dev_raw.split(" — ")[0].split(" · ")[0].strip() if dev_raw else "" 
-    loc        = listing.get("location_raw") or ""
-    entry_type = listing.get("entry_type", "compound")
-    entry_labels = {"compound": "🏘 Compound", "neighborhood": "🏙 Neighborhood", "small_compound": "🏠 Small Compound"}
-    entry_badge  = entry_labels.get(entry_type, "🏘 Compound")
-    ptype     = (listing.get("property_type") or "").capitalize()
-    beds      = listing.get("bedroom_count") or "—"
-    bua       = listing.get("bua_sqm") or "—"
-    floor_raw = listing.get("floor_number") or "—"
-    view      = (listing.get("view_type") or "not_specified").replace("_", " ")
-    finish    = (listing.get("finishing_status") or "not_specified").replace("_", " ")
-    delivery  = listing.get("delivery_date_raw") or "—"
-    uid       = listing.get("unit_id") or ""
-    url       = listing.get("source_url") or "#"
-
-    cash_now  = listing.get("seller_cash_required_now")
+def build_financial_section(listing: dict) -> str:
+    cash      = listing.get("seller_cash_required_now")
     remaining = listing.get("remaining_with_developer")
     ae_fee    = listing.get("aqar_exit_fee_egp")
-    total_now = listing.get("total_required_now_egp")
+    total     = listing.get("total_required_now_egp")
     upfront   = listing.get("upfront_cash_required")
-    overdue_egp = listing.get("known_overdue_amounts", 0) or 0
-    overdue_str = f"EGP {overdue_egp:,.0f}" if overdue_egp else ""
     exceeds   = listing.get("upfront_exceeds_limit")
+    aoc       = listing.get("latest_annual_ownership_cost")
+    clusters  = (listing.get("_scoring") or {}).get("comparable_cluster_count") or 0
 
     ce20 = listing.get("latest_cash_equivalent_20")
     ce25 = listing.get("latest_cash_equivalent_25")
     ce30 = listing.get("latest_cash_equivalent_30")
-    aoc  = listing.get("latest_annual_ownership_cost")
+    discount = (listing.get("_scoring") or {}).get("discount_to_median_pct")
 
-    score      = listing.get("latest_score") or 0
-    confidence = s.get("data_confidence_score") or listing.get("latest_data_confidence")
-    conf_pct   = f"{confidence:.0%}" if confidence else "—"
-    discount   = s.get("discount_to_median_pct")
-    clusters   = s.get("comparable_cluster_count") or 0
-
-    negotiable = "✓ Open to negotiation" if listing.get("is_negotiable") else ""
-    docs       = "✓ Documents verified" if listing.get("documents_verified") else ""
-
-    border_colour = C_GREEN if is_lead else C_BORDER
-    upfront_flag  = f"""
-      <tr><td colspan="2" style="background:{C_UPFRONT_FLAG};padding:8px;border-radius:4px;font-size:12px;">
-        ⚠ Upfront cash {_egp(upfront)} exceeds EGP 4M limit — flagged, not excluded
-      </td></tr>""" if exceeds else ""
-
-    return f"""
-    <div style="border:2px solid {border_colour};border-radius:8px;padding:20px;margin-bottom:16px;background:{C_CARD};">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
-        <div>
-          <span style="color:{C_MUTED};font-size:12px;">#{rank}</span>
-          {'&nbsp;' + _label_badge(listing.get("label","")) if is_lead else ""}
-          <h3 style="margin:4px 0;color:{C_PRIMARY};">
-            <a href="{url}" style="color:{C_PRIMARY};text-decoration:none;">{project}</a>
-          </h3>
-          <div style="font-size:13px;margin-top:2px;">
-            <span style="background:#e8f5e9;color:#2d6a4f;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold;">{entry_badge}</span>
-            {'&nbsp;<strong>' + dev + '</strong>' if dev else ''}
-            <span style="color:{C_MUTED};"> · {loc} · {uid}</span>
-          </div>
-        </div>
-        <div style="text-align:right;">
-          {_score_bar(score)}
-          <div style="font-size:12px;color:{C_MUTED};margin-top:4px;">Confidence: {conf_pct}</div>
-        </div>
-      </div>
-
-      <!-- Unit summary -->
-      <div style="margin:12px 0;padding:12px;background:{C_BG};border-radius:6px;font-size:13px;">
-        <strong>{ptype}</strong> · {beds} BR · {bua} m² · Floor {floor_raw} · {view} · {finish} · Delivery {delivery}
-        {'&nbsp; <span style="color:' + C_GREEN + ';">' + negotiable + '</span>' if negotiable else ""}
-        {'&nbsp; <span style="color:' + C_GREEN + ';">' + docs + '</span>' if docs else ""}
-      </div>
-
-      <!-- Financials table -->
-      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px;">
-        <tr style="background:{C_BG};">
-          <td style="padding:8px;font-weight:bold;color:{C_PRIMARY};">Cash to seller now</td>
-          <td style="padding:8px;font-weight:bold;font-size:16px;">{_egp(cash_now)}</td>
-          <td style="padding:8px;">Remaining with developer</td>
-          <td style="padding:8px;">{_egp(remaining)}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px;">Aqar Exit fee (1.25%)</td>
-          <td style="padding:8px;">{_egp(ae_fee)}</td>
-          <td style="padding:8px;"><strong>Total required now</strong></td>
-          <td style="padding:8px;font-weight:bold;">{_egp(total_now)}</td>
-        </tr>
-        {upfront_flag}
-        <tr style="background:{C_BG};">
-          <td style="padding:8px;">Annual ownership cost</td>
-          <td style="padding:8px;">{_egp(aoc)} / year</td>
-          <td style="padding:8px;">Comparable clusters</td>
-          <td style="padding:8px;">{clusters} clusters</td>
-        </tr>
-      </table>
-
-      <!-- Cash-equivalent sensitivity -->
-      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;">
-        <tr>
-          <th style="text-align:left;padding:6px 8px;background:{C_PRIMARY};color:white;border-radius:4px 0 0 0;">Rate</th>
-          <th style="text-align:right;padding:6px 8px;background:{C_PRIMARY};color:white;">Cash-equivalent</th>
-          <th style="text-align:right;padding:6px 8px;background:{C_PRIMARY};color:white;border-radius:0 4px 0 0;">vs Median</th>
-        </tr>
-        <tr>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};">20% (conservative)</td>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};text-align:right;">{_egp(ce20)}</td>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};text-align:right;">—</td>
-        </tr>
-        <tr style="background:#e8f5e9;">
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};font-weight:bold;">25% (ranking rate)</td>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};text-align:right;font-weight:bold;">{_egp(ce25)}</td>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};text-align:right;font-weight:bold;">{_pct(discount)}</td>
-        </tr>
-        <tr>
-          <td style="padding:6px 8px;">30% (aggressive)</td>
-          <td style="padding:6px 8px;text-align:right;">{_egp(ce30)}</td>
-          <td style="padding:6px 8px;text-align:right;">—</td>
-        </tr>
-      </table>
-
-      <!-- Score breakdown -->
-      <details style="margin-top:8px;">
-        <summary style="cursor:pointer;color:{C_MUTED};font-size:12px;user-select:none;">
-          Score breakdown (click to expand)
-        </summary>
-        <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;">
-          <tr>
-            <td style="padding:4px 8px;">Value vs comparables</td>
-            <td style="padding:4px 8px;text-align:right;">{s.get('comparables_score', 0):.1f} / 40</td>
-          </tr>
-          <tr style="background:{C_BG};">
-            <td style="padding:4px 8px;">Unit quality</td>
-            <td style="padding:4px 8px;text-align:right;">{s.get('unit_quality_score', 0):.1f} / 20</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 8px;">Project quality</td>
-            <td style="padding:4px 8px;text-align:right;">{s.get('project_quality_score', 0):.1f} / 20</td>
-          </tr>
-          <tr style="background:{C_BG};">
-            <td style="padding:4px 8px;">Payment terms</td>
-            <td style="padding:4px 8px;text-align:right;">{s.get('payment_terms_score', 0):.1f} / 15</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 8px;">Seller urgency</td>
-            <td style="padding:4px 8px;text-align:right;">{s.get('urgency_score', 0):.1f} / 5</td>
-          </tr>
-          <tr style="font-weight:bold;border-top:2px solid {C_BORDER};">
-            <td style="padding:6px 8px;">Total</td>
-            <td style="padding:6px 8px;text-align:right;">{score} / 100</td>
-          </tr>
-        </table>
-      </details>
-
-      {_build_project_intel(listing, ref_project) or ''}
-      {_build_verify_section(listing, overdue_str)}
-
-      <div style="margin-top:12px;font-size:12px;color:{C_MUTED};">
-        <a href="{url}" style="color:{C_ACCENT};">View on Aqar Exit →</a>
-      </div>
-    </div>
-    """
-
-
-def _dd_checklist() -> str:
-    """Compact due-diligence reminder for every shortlisted listing."""
-    items = [
-        ("[BD] Seller identity matches contract purchaser/assignee", True),
-        ("[BD] Original contract verified against listing details", True),
-        ("[BD] Official developer account statement obtained (not seller's claim)", True),
-        ("[BD] Developer permits resale — assignment fee and timeline confirmed with CRM", True),
-        ("[BD] Payment-plan transferability confirmed", True),
-        ("No co-owner, divorce, lien, court dispute, or blocking claim", False),
-        ("Realistic delivery date verified (not advertised date)", False),
-        ("Broker/brokerage GOEIC registration verified where applicable", False),
-        ("At least 3 comparable clusters obtained independently", False),
-    ]
-    rows = "".join(
-        f'<li style="margin-bottom:4px;{"font-weight:bold;" if bd else ""}">{item}</li>'
-        for item, bd in items
+    rows_html = (
+        row("Cash to seller now", egp(cash), C_BG)
+        + row("Remaining with developer", egp(remaining))
+        + row("Aqar Exit fee (1.25%)", egp(ae_fee), C_BG)
+        + row("Total required now", '<span style="font-size:14px;">' + egp(total) + '</span>')
     )
-    return f"""
-    <div style="background:{C_BG};border:1px solid {C_BORDER};border-radius:6px;padding:16px;margin-bottom:24px;">
-      <h4 style="margin:0 0 8px;color:{C_PRIMARY};">Due diligence checklist</h4>
-      <p style="font-size:12px;color:{C_MUTED};margin:0 0 8px;">
-        Items marked [BD] must be verified before any listing can be labelled Best Deal.
-        Until verified: high-potential lead only.
-      </p>
-      <ul style="font-size:12px;margin:0;padding-left:20px;">{rows}</ul>
-    </div>
-    """
+    if exceeds:
+        rows_html += ('<tr><td colspan="2" style="padding:6px 8px;background:' + C_FLAG
+                      + ';font-size:12px;">⚠ Upfront cash ' + egp(upfront)
+                      + ' exceeds EGP 4M limit — flagged, not excluded</td></tr>')
+    rows_html += (
+        row("Annual ownership cost", egp(aoc) + " / year", C_BG)
+        + row("Comparable clusters", str(clusters) + " clusters")
+    )
+
+    ce_rows = (
+        '<tr style="background:' + C_PRIMARY + ';color:#fff;">'
+        '<th style="padding:5px 8px;text-align:left;font-size:11px;">Rate</th>'
+        '<th style="padding:5px 8px;text-align:right;font-size:11px;">Cash-equivalent</th>'
+        '<th style="padding:5px 8px;text-align:right;font-size:11px;">vs Median</th></tr>'
+        '<tr><td style="padding:5px 8px;font-size:12px;">20% (conservative)</td>'
+        '<td style="padding:5px 8px;font-size:12px;text-align:right;">' + egp(ce20) + '</td>'
+        '<td style="padding:5px 8px;font-size:12px;text-align:right;">—</td></tr>'
+        '<tr style="background:#e8f5e9;"><td style="padding:5px 8px;font-size:12px;font-weight:bold;">25% (ranking rate)</td>'
+        '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;">' + egp(ce25) + '</td>'
+        '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;">' + pct(discount) + '</td></tr>'
+        '<tr><td style="padding:5px 8px;font-size:12px;">30% (aggressive)</td>'
+        '<td style="padding:5px 8px;font-size:12px;text-align:right;">' + egp(ce30) + '</td>'
+        '<td style="padding:5px 8px;font-size:12px;text-align:right;">—</td></tr>'
+    )
+
+    return table(rows_html) + table(ce_rows)
 
 
-def _needs_data_section(listings: list[dict]) -> str:
+def build_card(listing: dict, rank: int, is_lead: bool = False) -> str:
+    """One listing card — email-safe HTML."""
+    project = esc(listing.get("project_name_raw") or "Unknown project")
+    dev_raw = str(listing.get("developer_raw") or "")
+    dev = esc(dev_raw.split(" — ")[0].split(" · ")[0].strip()) if dev_raw else ""
+    loc = esc(listing.get("location_raw") or "")
+    uid = esc(listing.get("unit_id") or "")
+    url = esc(listing.get("source_url") or "#")
+
+    entry_type = listing.get("entry_type") or "compound"
+    badge_map = {"compound": "🏘 Compound", "neighborhood": "🏙 Neighborhood", "small_compound": "🏠 Small Compound"}
+    badge = badge_map.get(entry_type, "🏘 Compound")
+
+    ptype    = esc(str(listing.get("property_type") or "").capitalize())
+    beds     = esc(listing.get("bedroom_count") or "—")
+    bua      = esc(listing.get("bua_sqm") or "—")
+    floor    = esc(listing.get("floor_number") or "—")
+    view     = esc(str(listing.get("view_type") or "not specified").replace("_", " "))
+    finish   = esc(str(listing.get("finishing_status") or "not specified").replace("_", " "))
+    delivery = esc(listing.get("delivery_date_raw") or "—")
+
+    score = int(listing.get("latest_score") or 0)
+    conf  = listing.get("latest_data_confidence")
+    try:
+        conf_pct = "{:.0%}".format(float(conf))
+    except (TypeError, ValueError):
+        conf_pct = "—"
+
+    negotiable = listing.get("is_negotiable")
+    docs       = listing.get("documents_verified")
+    flags = []
+    if negotiable:
+        flags.append('<span style="color:' + C_GREEN + ';">✓ Open to negotiation</span>')
+    if docs:
+        flags.append('<span style="color:' + C_GREEN + ';">✓ Documents verified</span>')
+    flags_html = ("&nbsp;&nbsp;" + " &nbsp; ".join(flags)) if flags else ""
+
+    border = C_GREEN if is_lead else C_BORDER
+    lead_label = ""
+    if is_lead:
+        label = listing.get("label") or "High-Potential Lead"
+        lc = C_GREEN if "Best Deal" in label else C_AMBER
+        lead_label = ('&nbsp;<span style="background:' + lc
+                      + ';color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;">'
+                      + esc(label) + '</span>')
+
+    ref = listing.get("_ref_project")
+
+    html = (
+        '<div style="border:2px solid ' + border + ';border-radius:8px;padding:16px;margin-bottom:16px;background:' + C_CARD + ';">'
+
+        # Header row (table for email compatibility)
+        '<table cellpadding="0" cellspacing="0" style="width:100%;">'
+        '<tr>'
+        '<td style="vertical-align:top;">'
+        '<span style="color:' + C_MUTED + ';font-size:12px;">#' + str(rank) + '</span>' + lead_label +
+        '<h3 style="margin:4px 0;color:' + C_PRIMARY + ';font-size:15px;">'
+        '<a href="' + url + '" style="color:' + C_PRIMARY + ';text-decoration:none;">' + project + '</a></h3>'
+        '<div style="font-size:12px;">'
+        '<span style="background:#e8f5e9;color:' + C_GREEN + ';padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold;">' + badge + '</span>'
+        + ('&nbsp;<strong>' + dev + '</strong>' if dev else "")
+        + '<span style="color:' + C_MUTED + ';"> · ' + loc + ' · ' + uid + '</span>'
+        '</div>'
+        '</td>'
+        '<td style="vertical-align:top;text-align:right;white-space:nowrap;">'
+        + score_display(score) +
+        '<div style="font-size:11px;color:' + C_MUTED + ';">Confidence: ' + conf_pct + '</div>'
+        '</td>'
+        '</tr>'
+        '</table>'
+
+        # Unit summary
+        '<div style="margin:10px 0;padding:8px 10px;background:' + C_BG + ';border-radius:5px;font-size:12px;">'
+        '<strong>' + ptype + '</strong> · ' + str(beds) + ' BR · ' + str(bua) + ' m² · Floor ' + str(floor)
+        + ' · ' + view + ' · ' + finish + ' · Delivery ' + delivery + flags_html +
+        '</div>'
+
+        + build_financial_section(listing)
+        + build_score_section(listing, score)
+        + build_intel_section(ref)
+        + build_verify_section(listing)
+
+        + '<div style="margin-top:10px;font-size:12px;">'
+        '<a href="' + url + '" style="color:' + C_ACCENT + ';">View on Aqar Exit →</a>'
+        '</div>'
+        '</div>'
+    )
+    return html
+
+
+def build_dd_checklist() -> str:
+    bd = [
+        "Seller identity matches contract purchaser/assignee",
+        "Original contract verified against listing details",
+        "Official developer account statement obtained (not seller's claim)",
+        "Developer permits resale — assignment fee and timeline confirmed with CRM",
+        "Payment-plan transferability confirmed",
+    ]
+    other = [
+        "No co-owner, divorce, lien, court dispute, or blocking claim",
+        "Realistic delivery date verified (not advertised date)",
+        "Broker/brokerage GOEIC registration verified where applicable",
+        "At least 3 comparable clusters obtained independently",
+    ]
+    items = [li("<strong>[BD] " + esc(x) + "</strong>") for x in bd] + [li(esc(x)) for x in other]
+    return ('<div style="background:' + C_BG + ';border:1px solid ' + C_BORDER
+            + ';border-radius:6px;padding:14px;margin-bottom:24px;">'
+            '<div style="font-weight:bold;margin-bottom:6px;color:' + C_PRIMARY + ';">Due diligence checklist</div>'
+            '<div style="font-size:12px;color:' + C_MUTED + ';margin-bottom:8px;">'
+            'Items marked [BD] must be verified before any listing can be labelled Best Deal. '
+            'Until verified: high-potential lead only.</div>'
+            '<ul style="font-size:12px;margin:0;padding-left:18px;">' + "".join(items) + '</ul>'
+            '</div>')
+
+
+def build_needs_data(listings: list) -> str:
     if not listings:
         return ""
-    rows = "".join(
-        f"""<tr>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};">
-            <a href="{l.get('source_url','#')}" style="color:{C_ACCENT};">
-              {l.get('project_name_raw','—')} {l.get('unit_id','')}
-            </a>
-          </td>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};">{l.get('property_type','')}</td>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};">{l.get('bedroom_count','—')} BR / {l.get('bua_sqm','—')} m²</td>
-          <td style="padding:6px 8px;border-bottom:1px solid {C_BORDER};color:{C_MUTED};font-size:11px;">{l.get('exclusion_reason','')}</td>
-        </tr>"""
-        for l in listings
+    rows_html = ""
+    for l in listings:
+        name = esc(l.get("project_name_raw") or "—") + " " + esc(l.get("unit_id") or "")
+        url  = esc(l.get("source_url") or "#")
+        rows_html += (
+            '<tr>'
+            '<td style="padding:6px 8px;border-bottom:1px solid ' + C_BORDER + ';font-size:12px;">'
+            '<a href="' + url + '" style="color:' + C_ACCENT + ';">' + name + '</a></td>'
+            '<td style="padding:6px 8px;border-bottom:1px solid ' + C_BORDER + ';font-size:12px;">'
+            + esc(l.get("property_type") or "") + '</td>'
+            '<td style="padding:6px 8px;border-bottom:1px solid ' + C_BORDER + ';font-size:12px;">'
+            + esc(l.get("bedroom_count") or "—") + ' BR / ' + esc(l.get("bua_sqm") or "—") + ' m²</td>'
+            '<td style="padding:6px 8px;border-bottom:1px solid ' + C_BORDER + ';font-size:11px;color:' + C_MUTED + ';">'
+            + esc(l.get("exclusion_reason") or "") + '</td>'
+            '</tr>'
+        )
+    return (
+        '<h2 style="color:' + C_PRIMARY + ';font-size:17px;margin:32px 0 10px;">Needs data — potentially eligible</h2>'
+        '<p style="color:' + C_MUTED + ';font-size:12px;margin:0 0 10px;">'
+        'These listings were not ranked because key fields are missing. '
+        'Open each on Aqar Exit to complete the data manually via the intake form.</p>'
+        '<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">'
+        '<tr style="background:' + C_PRIMARY + ';color:#fff;">'
+        '<th style="padding:7px 8px;text-align:left;font-size:12px;">Project</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:12px;">Type</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:12px;">Size</th>'
+        '<th style="padding:7px 8px;text-align:left;font-size:12px;">Missing</th>'
+        '</tr>' + rows_html + '</table>'
     )
-    return f"""
-    <h2 style="color:{C_PRIMARY};margin:32px 0 12px;">Needs data — potentially eligible</h2>
-    <p style="color:{C_MUTED};font-size:13px;">
-      These listings were not ranked because key fields are missing.
-      Open each on Aqar Exit to complete the data manually via the intake form.
-    </p>
-    <table style="width:100%;border-collapse:collapse;font-size:13px;">
-      <tr style="background:{C_PRIMARY};color:white;">
-        <th style="padding:8px;text-align:left;">Project</th>
-        <th style="padding:8px;text-align:left;">Type</th>
-        <th style="padding:8px;text-align:left;">Size</th>
-        <th style="padding:8px;text-align:left;">Missing</th>
-      </tr>
-      {rows}
-    </table>
-    """
 
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def build_html(data: dict) -> str:
-    """Build complete HTML email body."""
-    top10      = data["top10"]
-    leads      = data["leads"]
-    needs_data = data["needs_data"]
-    run_dt     = data["run_datetime"]
-    total      = data["total_eligible"]
+    top10      = data.get("top10") or []
+    leads      = data.get("leads") or []
+    needs_data = data.get("needs_data") or []
+    run_dt     = esc(data.get("run_datetime") or "")
+    total      = data.get("total_eligible") or 0
 
-    # ── Header ──────────────────────────────────────────────────────────────
-    header = f"""
-    <div style="background:{C_PRIMARY};color:white;padding:24px;border-radius:8px 8px 0 0;margin-bottom:24px;">
-      <h1 style="margin:0;font-size:22px;">Cairo Deal-Finder</h1>
-      <p style="margin:4px 0 0;opacity:0.7;font-size:13px;">
-        Daily report · {run_dt} · {total} eligible listings in database
-      </p>
-    </div>
-    """
+    header = (
+        '<div style="background:' + C_PRIMARY + ';color:#fff;padding:20px;border-radius:8px 8px 0 0;margin-bottom:20px;">'
+        '<div style="font-size:20px;font-weight:bold;">Cairo Deal-Finder</div>'
+        '<div style="font-size:12px;opacity:0.75;margin-top:4px;">Daily report · ' + run_dt
+        + ' · ' + str(total) + ' eligible listings in database</div>'
+        '</div>'
+    )
 
-    # ── Top 3 leads section ─────────────────────────────────────────────────
     has_verified = any(l.get("is_stage1_eligible") for l in leads)
-    leads_title  = "Top 3 high-potential leads" if not has_verified else "Top 3 — includes verified Best Deal(s)"
-    leads_html = f"<h2 style='color:{C_PRIMARY};margin-bottom:12px;'>{leads_title}</h2>"
-    leads_html += "".join(
-        _listing_card(l, i + 1, is_lead=True, ref_project=l.get("_ref_project")) for i, l in enumerate(leads)
+    leads_title = "Top 3 — includes verified Best Deal(s)" if has_verified else "Top 3 high-potential leads"
+    leads_html = '<h2 style="color:' + C_PRIMARY + ';font-size:17px;margin-bottom:10px;">' + leads_title + '</h2>'
+    for i, l in enumerate(leads):
+        try:
+            leads_html += build_card(l, i + 1, is_lead=True)
+        except Exception as e:
+            leads_html += ('<div style="color:red;padding:10px;">Card error #' + str(i + 1) + ': ' + esc(str(e)) + '</div>')
+
+    leads_html += build_dd_checklist()
+
+    top10_html = '<h2 style="color:' + C_PRIMARY + ';font-size:17px;margin:28px 0 10px;">Top 10 ranked opportunities</h2>'
+    for i, l in enumerate(top10):
+        try:
+            top10_html += build_card(l, i + 1)
+        except Exception as e:
+            top10_html += ('<div style="color:red;padding:10px;">Card error #' + str(i + 1) + ': ' + esc(str(e)) + '</div>')
+
+    nd_html = build_needs_data(needs_data)
+
+    footer = (
+        '<div style="border-top:1px solid ' + C_BORDER + ';margin-top:28px;padding-top:14px;'
+        'color:' + C_MUTED + ';font-size:11px;text-align:center;">'
+        '<p style="margin:4px 0;">Cash-equivalent uses 25% annual EGP discount rate for ranking. '
+        'All comparables are active asking prices — not completed-sale values.</p>'
+        '<p style="margin:4px 0;">A listing cannot be marked Best Deal until Stage 2 human verification is complete.</p>'
+        '<p style="margin:4px 0;">Cairo Deal-Finder · Personal research tool · Not financial advice</p>'
+        '</div>'
     )
-    leads_html += _dd_checklist()
 
-    # ── Top 10 full list ────────────────────────────────────────────────────
-    top10_html = f"<h2 style='color:{C_PRIMARY};margin:32px 0 12px;'>Top 10 ranked opportunities</h2>"
-    top10_html += "".join(
-        _listing_card(l, i + 1, ref_project=l.get("_ref_project")) for i, l in enumerate(top10)
+    return (
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"></head>'
+        '<body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;'
+        'max-width:680px;margin:0 auto;padding:14px;background:' + C_BG + ';color:#212529;">'
+        + header + leads_html + top10_html + nd_html + footer +
+        '</body></html>'
     )
-
-    # ── Needs data section ───────────────────────────────────────────────────
-    nd_html = _needs_data_section(needs_data)
-
-    # ── Footer ───────────────────────────────────────────────────────────────
-    footer = f"""
-    <div style="border-top:1px solid {C_BORDER};margin-top:32px;padding-top:16px;
-                color:{C_MUTED};font-size:11px;text-align:center;">
-      <p>Cash-equivalent uses 25% annual EGP discount rate for ranking.
-      All comparables are active asking prices — not completed-sale values.</p>
-      <p>A listing cannot be marked Best Deal until Stage 2 human verification is complete.</p>
-      <p>Cairo Deal-Finder · Personal research tool · Not financial advice</p>
-    </div>
-    """
-
-    body = f"""
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-    <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;
-                 max-width:680px;margin:0 auto;padding:16px;background:{C_BG};color:#212529;">
-      {header}
-      {leads_html}
-      {top10_html}
-      {nd_html}
-      {footer}
-    </body>
-    </html>
-    """
-    return body
 
 
 def build_subject(data: dict) -> str:
-    leads  = data["leads"]
-    top    = leads[0] if leads else None
-    score  = top.get("latest_score", 0) if top else 0
-    proj   = (top.get("project_name_raw") or "—") if top else "—"
-    ce25   = top.get("latest_cash_equivalent_25") if top else None
-    price  = f"EGP {ce25:,.0f}" if ce25 else "—"
-    date   = data["run_date"]
-    return f"[{date}] Top deal: {proj} — Score {score}/100 — {price}"
+    leads = data.get("leads") or []
+    top   = leads[0] if leads else None
+    score = (top.get("latest_score") or 0) if top else 0
+    proj  = (top.get("project_name_raw") or "—") if top else "—"
+    ce25  = top.get("latest_cash_equivalent_25") if top else None
+    price = egp(ce25) if ce25 else "—"
+    date  = data.get("run_date") or ""
+    return "[" + str(date) + "] Top deal: " + str(proj) + " — Score " + str(score) + "/100 — " + price
