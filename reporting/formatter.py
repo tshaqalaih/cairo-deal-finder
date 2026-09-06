@@ -225,9 +225,82 @@ def build_verify_section(listing: dict) -> str:
     return section_box("What to check for this unit", body, C_VERIFY, "#f59e0b")
 
 
+
+def _derive_sub_scores(listing: dict, sc: dict) -> dict:
+    """Fill in sub-scores from listing fields when DB columns are null/zero."""
+    def _has(k): return sc.get(k) is not None and float(sc.get(k) or 0) > 0
+
+    ptype   = str(listing.get("property_type") or "").lower()
+    bua     = float(listing.get("bua_sqm") or 0)
+    beds    = int(listing.get("bedroom_count") or 0)
+    view    = str(listing.get("view_type") or "not_specified")
+    finish  = str(listing.get("finishing_status") or "not_specified")
+    deliv   = str(listing.get("delivery_status") or "not_specified")
+    parking = str(listing.get("parking_included") or "not_specified")
+    roof    = str(listing.get("roof_terrace") or "not_specified")
+    garden  = str(listing.get("private_garden") or "not_specified")
+    ref     = listing.get("_ref_project") or {}
+    track   = str(ref.get("delivery_track_record") or "unknown")
+    mat     = str(ref.get("project_maturity") or "unknown")
+    liq     = str(ref.get("liquidity_tier") or "unknown")
+    rw      = str(ref.get("ring_road_nw_access") or "unknown")
+    s90     = str(ref.get("southern_90th_proximity") or "unknown")
+    yrs     = float(listing.get("installments_remaining_years") or 0)
+    cash    = float(listing.get("seller_cash_required_now") or 0)
+    ce25    = float(listing.get("latest_cash_equivalent_25") or 0)
+    annual  = float(listing.get("annual_installment_egp") or 0)
+    sched   = str(listing.get("schedule_source") or "unknown")
+    negot   = listing.get("is_negotiable") or False
+    has_rem = float(listing.get("remaining_with_developer") or 0) > 0
+
+    out = dict(sc)
+
+    type_s = {"ivilla":3,"s_villa":3,"duplex":2,"quattro":2,"twinhouse":2,"townhouse":2,"penthouse":2}.get(ptype,1)
+    size_s = 3 if 160<=bua<=185 else (2 if 140<=bua<160 or 185<bua<=220 else 0)
+    beds_s = min(3.0, (3 if beds>=4 else 2 if beds==3 else 1))
+    view_s = {"pool_view":3,"garden_view":3,"landscape_view":3,"open_view":3,"street_view":1}.get(view,0)
+    fl_s   = 3 if roof=="yes" else (2 if garden=="yes" else (2 if view in ("open_view","landscape_view") else 1))
+    park_s = {"yes":2,"separate_cost":1}.get(parking,0)
+    fin_s  = {"fully_finished":2,"semi_finished":1}.get(finish,0)
+    del_s  = {"ready_to_move":1,"delivered_not_finished":0.5}.get(deliv,0)
+
+    track_s = {"excellent":5,"completed":5,"good":4,"fair":2,"poor":1}.get(track,2)
+    mat_s   = {"established":5,"emerging":3,"new_standalone":0}.get(mat,2)
+    dc_s    = {"ready_to_move":4,"delivered_not_finished":3}.get(deliv,3 if mat=="established" else 1.5)
+    liq_s   = {"high":3,"medium":2,"low":1}.get(liq,1.5)
+    loc_map = {"high":1.5,"medium":1.0,"low":0.5}
+    loc_s   = min(3.0, loc_map.get(rw,0.5)+loc_map.get(s90,0.5))
+
+    cd_s  = 5 if not has_rem else (4 if yrs<=1 else (3 if yrs<=1.5 else (2 if yrs<=3 else 1)))
+    up_s  = (4 if ce25>0 and cash/ce25<=0.20 else (3 if ce25>0 and cash/ce25<=0.35 else (2 if ce25>0 and cash/ce25<=0.50 else 1))) if ce25>0 else 1
+    ann_s = 3 if not has_rem else (3 if ce25>0 and annual/ce25<=0.08 else (2 if ce25>0 and annual/ce25<=0.15 else 1)) if ce25>0 else 0
+    sc_s  = {"developer_statement":3,"seller_claim":2,"listing_text":1}.get(sched,0)
+    urg_s = min(5.0,(1.5 if negot else 0)+(1.5 if (listing.get("price_reduction_count") or 0)>0 else 0)+(1.0 if listing.get("urgency_keywords_detected") else 0))
+
+    if not _has("uq_type_score"):      out["uq_type_score"]      = type_s
+    if not _has("uq_size_score"):      out["uq_size_score"]      = size_s
+    if not _has("uq_bedrooms_score"):  out["uq_bedrooms_score"]  = beds_s
+    if not _has("uq_view_score"):      out["uq_view_score"]      = view_s
+    if not _has("uq_floor_outdoor_score"): out["uq_floor_outdoor_score"] = fl_s
+    if not _has("uq_parking_score"):   out["uq_parking_score"]   = park_s
+    if not _has("uq_finishing_score"): out["uq_finishing_score"] = fin_s
+    if not _has("uq_delivery_score"):  out["uq_delivery_score"]  = del_s
+    if not _has("pq_developer_score"): out["pq_developer_score"] = track_s
+    if not _has("pq_maturity_score"):  out["pq_maturity_score"]  = mat_s
+    if not _has("pq_delivery_cred_score"): out["pq_delivery_cred_score"] = dc_s
+    if not _has("pq_liquidity_score"): out["pq_liquidity_score"] = liq_s
+    if not _has("pq_location_score"):  out["pq_location_score"]  = loc_s
+    if not _has("pt_cash_discount_score"):  out["pt_cash_discount_score"]  = cd_s
+    if not _has("pt_upfront_burden_score"): out["pt_upfront_burden_score"] = up_s
+    if not _has("pt_monthly_burden_score"): out["pt_monthly_burden_score"] = ann_s
+    if not _has("pt_schedule_conf_score"):  out["pt_schedule_conf_score"]  = sc_s
+    if not _has("urgency_score"):      out["urgency_score"]      = urg_s
+    return out
+
+
 def build_score_detail(listing: dict, score: int) -> str:
     """Full score breakdown with sub-factors — rendered in the appendix."""
-    sc = listing.get("_scoring") or {}
+    sc = _derive_sub_scores(listing, listing.get("_scoring") or {})
 
     def f1(v):
         try:
@@ -347,11 +420,15 @@ def build_financial_section(listing: dict) -> str:
     ce30 = listing.get("latest_cash_equivalent_30")
     discount = (listing.get("_scoring") or {}).get("discount_to_median_pct")
 
+    total_colour = C_ACCENT if exceeds else C_GREEN
     rows_html = (
         row("Cash to seller now", egp(cash), C_BG)
-        + row("Remaining with developer", egp(remaining))
+        + row("Remaining with developer (future)", egp(remaining))
         + row("Aqar Exit fee (1.25%)", egp(ae_fee), C_BG)
-        + row("Total required now", '<span style="font-size:14px;">' + egp(total) + '</span>')
+        + ('<tr style="border-top:2px solid ' + C_BORDER + ';"><td style="padding:7px 8px;font-size:13px;font-weight:bold;color:#1a1a2e !important;">Total required NOW (day 1)</td>'
+           '<td style="padding:7px 8px;font-size:15px;text-align:right;font-weight:bold;color:' + total_colour + ' !important;white-space:nowrap;">' + egp(total) + '</td></tr>')
+        + ('<tr style="border-top:1px dashed ' + C_BORDER + ';"><td style="padding:5px 8px;font-size:11px;color:#555 !important;">Total acquisition cost (cash-equiv @ 25%)</td>'
+           '<td style="padding:5px 8px;font-size:12px;text-align:right;font-weight:bold;color:#1a1a2e !important;white-space:nowrap;">' + egp(ce25) + '</td></tr>')
     )
     if exceeds:
         rows_html += ('<tr><td colspan="2" style="padding:6px 8px;background:' + C_FLAG
