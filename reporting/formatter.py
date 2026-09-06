@@ -96,7 +96,48 @@ def _build_verify_section(listing: dict, overdue_amount: str) -> str:
     if scoring.get("comparable_cluster_count", 0) == 0:
         items.append(("📋", "No comparable clusters yet — get 3 independent price quotes before committing"))
 
-    if not items:
+    # Estimated unknown costs
+    entry_type = listing.get("entry_type", "compound")
+    bua = listing.get("bua_sqm") or 0
+    project = (listing.get("project_name_raw") or "").lower()
+
+    # Maintenance estimate based on entry type and known projects
+    if entry_type == "compound":
+        # Known high-maintenance compounds
+        if any(p in project for p in ["hyde park", "هايد بارك", "mivida", "ميفيدا", "palm hills", "بالم هيلز", "mountain view", "lake view", "swan lake", "eastown", "villette"]):
+            maint_low  = int(bua * 500)
+            maint_high = int(bua * 800)
+        else:
+            maint_low  = int(bua * 300)
+            maint_high = int(bua * 600)
+        maint_note = f"~EGP {maint_low:,}–{maint_high:,}/year (compound maintenance estimate)"
+    elif entry_type == "neighborhood":
+        maint_low  = int(bua * 50)
+        maint_high = int(bua * 150)
+        maint_note = f"~EGP {maint_low:,}–{maint_high:,}/year (open neighborhood estimate)"
+    else:
+        maint_low  = int(bua * 200)
+        maint_high = int(bua * 500)
+        maint_note = f"~EGP {maint_low:,}–{maint_high:,}/year (estimate)"
+
+    # Club membership
+    if entry_type == "compound":
+        club_note = "Club membership: EGP 150,000–500,000 one-time (confirm with developer)"
+    else:
+        club_note = None
+
+    # Developer transfer fee
+    cash_now = listing.get("seller_cash_required_now") or 0
+    remaining = listing.get("remaining_with_developer") or 0
+    contract_value = cash_now + remaining
+    if contract_value > 0:
+        transfer_low  = int(contract_value * 0.01)
+        transfer_high = int(contract_value * 0.025)
+        transfer_note = f"Developer transfer fee: ~EGP {transfer_low:,}–{transfer_high:,} (1–2.5% of contract value — confirm with developer)"
+    else:
+        transfer_note = "Developer transfer fee: confirm with developer"
+
+    if not items and not maint_note:
         return ""
 
     rows = "".join(
@@ -104,10 +145,19 @@ def _build_verify_section(listing: dict, overdue_amount: str) -> str:
         f'<span style="margin-right:4px;">{icon}</span>{text}</li>'
         for icon, text in items
     )
+
+    cost_rows = f'<li style="margin-bottom:3px;">💰 Maintenance: {maint_note}</li>'
+    if club_note:
+        cost_rows += f'<li style="margin-bottom:3px;">💰 {club_note}</li>'
+    cost_rows += f'<li style="margin-bottom:3px;">💰 {transfer_note}</li>'
+    cost_rows += f'<li style="margin-bottom:3px;">💰 Legal/notarization: EGP 5,000–20,000</li>'
+
     return f"""
       <div style="margin-top:12px;padding:10px;background:#fff8e1;border-left:3px solid #f59e0b;border-radius:0 4px 4px 0;font-size:12px;">
         <div style="font-weight:bold;margin-bottom:6px;color:#92400e;">What to check for this unit</div>
-        <ul style="margin:0;padding-left:16px;color:#78350f;">{rows}</ul>
+        {f'<ul style="margin:0 0 8px 0;padding-left:16px;color:#78350f;">{rows}</ul>' if items else ''}
+        <div style="font-weight:bold;margin:6px 0 4px;color:#92400e;">Estimated costs not in cash-equivalent</div>
+        <ul style="margin:0;padding-left:16px;color:#78350f;">{cost_rows}</ul>
       </div>"""
 
 def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
@@ -167,9 +217,9 @@ def _listing_card(listing: dict, rank: int, is_lead: bool = False) -> str:
           <h3 style="margin:4px 0;color:{C_PRIMARY};">
             <a href="{url}" style="color:{C_PRIMARY};text-decoration:none;">{project}</a>
           </h3>
-          <div style="font-size:13px;margin-top:2px;">
+                  <div style="font-size:13px;margin-top:2px;">
             <span style="background:#e8f5e9;color:#2d6a4f;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:bold;">{entry_badge}</span>
-            {'&nbsp;<strong>' + dev + '</strong>' if dev else ''}
+            {'&nbsp;<strong>' + dev.split("·")[0].strip() + '</strong>' if dev else ''}
             <span style="color:{C_MUTED};"> · {loc} · {uid}</span>
           </div>
         </div>
